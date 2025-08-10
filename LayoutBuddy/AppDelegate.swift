@@ -329,7 +329,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let curID = currentInputSourceID()
         let curLangPrefix = isLayoutUkrainian(curID) ? "uk" : "en"
         let otherLangPrefix = (curLangPrefix == "en") ? "uk" : "en"
-        let suspiciousEN = (curLangPrefix == "en") && containsLetterLikePunct(wordBuffer)
+
+        // NEW: split trailing terminal punctuation from the buffered word
+        let (core, trailingCount) = splitTrailingMapped(wordBuffer)
+        let suspiciousEN = (curLangPrefix == "en") && containsSuspiciousMapped(core)
 
         guard let curSpell = bestSpellLang(for: curLangPrefix),
               let otherSpell = bestSpellLang(for: otherLangPrefix) else {
@@ -337,37 +340,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        if !suspiciousEN && isSpelledCorrect(wordBuffer, language: curSpell) {
+        // If core is OK in current language and not suspicious, keep it
+        if !suspiciousEN && isSpelledCorrect(core, language: curSpell) {
             wordBuffer = ""
             return
         }
 
-        let converted = convert(wordBuffer, from: curLangPrefix, to: otherLangPrefix)
+        let convertedCore = convert(core, from: curLangPrefix, to: otherLangPrefix)
 
         var shouldReplace = false
-
-        // Primary rule: converted word is valid in the other language
-        if !converted.isEmpty, isSpelledCorrect(converted, language: otherSpell) {
+        // Prefer dictionary-confirmed replacement
+        if !convertedCore.isEmpty, isSpelledCorrect(convertedCore, language: otherSpell) {
             shouldReplace = true
         } else {
-            // Fallback rule: clearly typed on ABC (Latin) using UA positions
-            if curLangPrefix == "en", containsLetterLikePunct(wordBuffer), isAllCyrillic(converted) {
+            // Fallback: in EN with mapped chars *inside* the word and Cyrillic result
+            if curLangPrefix == "en", containsSuspiciousMapped(core), isAllCyrillic(convertedCore) {
                 shouldReplace = true
             }
         }
+
         if shouldReplace {
+            // IMPORTANT: delete only the core letters, not the trailing punctuation we trimmed
             replaceLastWord(
-                with: converted,
+                with: convertedCore,
                 targetLangPrefix: otherLangPrefix,
-                keepFollowingBoundary: keepFollowingBoundary
+                keepFollowingBoundary: keepFollowingBoundary,
+                deleteCountOverride: core.count
             )
             playSwitchSound()
             updateStatusTitleAndColor()
         }
 
-
         wordBuffer = ""
     }
+
 
     // MARK: - Word utils + spellcheck
 
@@ -411,22 +417,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func replaceLastWord(with newWord: String,
                                  targetLangPrefix: String,
-                                 keepFollowingBoundary: Bool) {
-        let deleteCount = wordBuffer.count
+                                 keepFollowingBoundary: Bool,
+                                 deleteCountOverride: Int? = nil) {
+        let deleteCount = deleteCountOverride ?? wordBuffer.count
 
         DispatchQueue.main.async {
             self.isSynthesizing = true
-
-            // If caret is after a boundary (space/punctuation) keep it:
-            if keepFollowingBoundary { self.tapKey(.leftArrow) }
-
-            // Delete wrong word
+            if keepFollowingBoundary { self.tapKey(.leftArrow) } // keep following boundary (e.g., space)
             self.sendBackspace(times: deleteCount)
 
-            // Decide target: prefer language-based, else flip to the other of your pair
             let targetID = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
-
-            // Switch & poll until it sticks, then type corrected word
             self.ensureSwitch(to: targetID) {
                 self.typeUnicode(newWord)
                 if keepFollowingBoundary { self.tapKey(.rightArrow) }
@@ -435,6 +435,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
+
 
     private func sendBackspace(times: Int) {
         guard times > 0 else { return }
@@ -538,12 +539,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return out
     }
     
-    // EN→UK letter keys that look like punctuation on ABC
-    private let letterLikePunctScalars = Set("[];',.".unicodeScalars)
-    private func isMappedLatinPunctuation(_ s: UnicodeScalar) -> Bool {
-        letterLikePunctScalars.contains(s)
-    }
-    
     private func containsLetterLikePunct(_ s: String) -> Bool {
         s.unicodeScalars.contains { letterLikePunctScalars.contains($0) }
     }
@@ -557,6 +552,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func isWordInternal(_ s: UnicodeScalar) -> Bool {
         wordInternalScalars.contains(s)
     }
+    
+    // EN→UK letter keys that look like punctuation on ABC (used for buffering)
+    private let letterLikePunctScalars = Set("[];',.".unicodeScalars)
+
+    // Only these should be considered "suspicious" inside an EN word (exclude apostrophe)
+    private let suspicionMappedScalars = Set("[];,. ".unicodeScalars).subtracting(Set("'".unicodeScalars))
+
+    // Terminal punctuation we might strip from the end of the buffer
+    private let trailingMappedScalars = Set(".,;".unicodeScalars)
+
+    private func isMappedLatinPunctuation(_ s: UnicodeScalar) -> Bool {
+        letterLikePunctScalars.contains(s)
+    }
+
+    private func splitTrailingMapped(_ s: String) -> (core: String, trailingCount: Int) {
+        var scalars = Array(s.unicodeScalars)
+        var idx = scalars.count
+        while idx > 0, let last = scalars.last, trailingMappedScalars.contains(last) {
+            scalars.removeLast()
+            idx -= 1
+        }
+        let core = String(String.UnicodeScalarView(scalars))
+        let trailingCount = s.count - core.count
+        return (core, trailingCount)
+    }
+
+    private func containsSuspiciousMapped(_ s: String) -> Bool {
+        s.unicodeScalars.contains { suspicionMappedScalars.contains($0) }
+    }
+
 
     // EN -> UK (Ukrainian standard)
     private let en2uk: [Character: String] = [
