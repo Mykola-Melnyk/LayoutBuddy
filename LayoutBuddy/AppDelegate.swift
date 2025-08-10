@@ -241,11 +241,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func autoDetectSecondaryID() -> String {
-        let primary = autoDetectPrimaryID()
+        // Use the persisted primaryID rather than auto-detecting again. The previous
+        // implementation called `autoDetectPrimaryID()` which inspects the *current*
+        // keyboard layout. If the user has changed their primary layout but hasn't
+        // switched to it yet, using the current layout could yield the same ID for
+        // both primary and secondary layouts. By reading the stored `primaryID` we
+        // ensure the secondary layout is chosen relative to the actual primary
+        // preference.
+        let primary = primaryID
         let all = listSelectableKeyboardLayouts()
         let primaryLang = all.first(where: { $0.id == primary })?.languages.first ?? ""
         let desiredPrefix = primaryLang.hasPrefix("en") ? "uk" : "en"
-        if let differentLang = all.first(where: { $0.languages.contains(where: { $0.hasPrefix(desiredPrefix) }) && $0.id != primary }) {
+        if let differentLang = all.first(where: {
+            $0.languages.contains(where: { $0.hasPrefix(desiredPrefix) }) && $0.id != primary
+        }) {
             return differentLang.id
         }
         return all.first(where: { $0.id != primary })?.id ?? primary
