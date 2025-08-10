@@ -69,8 +69,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "textformat", accessibilityDescription: "Layout")
-        statusItem.button?.imagePosition = .imageLeading
+        // Menu bar icon: ∞
+        if let img = NSImage(systemSymbolName: "infinity", accessibilityDescription: "LayoutBuddy") {
+            img.isTemplate = true // adopt menu bar tint (auto light/dark)
+            statusItem.button?.image = img
+            statusItem.button?.imagePosition = .imageOnly
+        } else {
+            // Fallback if SF Symbol unavailable (very old macOS): still icon-only
+            statusItem.button?.title = "∞"
+            statusItem.button?.imagePosition = .noImage
+        }
 
         rebuildMenu()
         updateStatusTitleAndColor()
@@ -88,48 +96,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func rebuildMenu() {
         let menu = NSMenu()
-
-        let toggleItem = NSMenuItem(title: "Toggle Layout", action: #selector(toggleLayout), keyEquivalent: "")
-        toggleItem.target = self
-        menu.addItem(toggleItem)
-
-        let selectItem = NSMenuItem(title: "Select Layouts…", action: nil, keyEquivalent: "")
-        let selectMenu = NSMenu(title: "Select Layouts…")
-        menu.addItem(selectItem)
-        menu.setSubmenu(selectMenu, for: selectItem)
-
-        let primaryHeader = NSMenuItem(title: "Set as Primary", action: nil, keyEquivalent: "")
-        primaryHeader.isEnabled = false
-        selectMenu.addItem(primaryHeader)
-
-        for info in listSelectableKeyboardLayouts() {
-            let item = NSMenuItem(title: "• \(info.name)", action: #selector(setAsPrimary(_:)), keyEquivalent: "")
-            item.representedObject = info.id
-            item.target = self
-            if info.id == primaryID { item.state = .on }
-            selectMenu.addItem(item)
-        }
-
-        selectMenu.addItem(NSMenuItem.separator())
-
-        let secondaryHeader = NSMenuItem(title: "Set as Secondary", action: nil, keyEquivalent: "")
-        secondaryHeader.isEnabled = false
-        selectMenu.addItem(secondaryHeader)
-
-        for info in listSelectableKeyboardLayouts() where info.id != primaryID {
-            let item = NSMenuItem(title: "• \(info.name)", action: #selector(setAsSecondary(_:)), keyEquivalent: "")
-            item.representedObject = info.id
-            item.target = self
-            if info.id == secondaryID { item.state = .on }
-            selectMenu.addItem(item)
-        }
-
-        menu.addItem(NSMenuItem.separator())
-
-        let quitItem = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "Quit LayoutBuddy", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
-
         statusItem.menu = menu
     }
 
@@ -168,14 +137,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateStatusTitleAndColor() {
         guard let button = statusItem.button else { return }
+        // No text label in the menubar:
+        button.title = ""                          // clear any plain title
+        button.attributedTitle = NSAttributedString(string: "")
+        // Keep a tooltip with the current layout's full name:
         let curID = currentInputSourceID()
-        let label = shortName(for: curID)
-        let isUkr = isLanguage(id: curID, hasPrefix: "uk")
-        let font = NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold)
-        let color = isUkr ? NSColor.systemBlue : NSColor.labelColor
-        button.attributedTitle = NSAttributedString(string: label, attributes: [.font: font, .foregroundColor: color])
-        button.toolTip = fullName(for: curID)
+        button.toolTip = fullName(for: curID)      // e.g., "U.S." or "Ukrainian - PC"
+        // (Optional) If you ever want tint by layout, set:
+        // button.contentTintColor = isLanguage(id: curID, hasPrefix: "uk") ? .systemBlue : .labelColor
     }
+
 
     private func shortName(for id: String) -> String {
         if isLanguage(id: id, hasPrefix: "uk") { return "UKR" }
