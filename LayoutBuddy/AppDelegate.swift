@@ -7,7 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - State
 
-    private var statusItem: NSStatusItem!
+    private var statusItem: NSStatusItem?
     
     // Toggle diagnostics here
     private let enableDiagnostics = false
@@ -69,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        guard let statusItem = statusItem else { return }
         // Menu bar icon: ∞
         if let img = NSImage(systemSymbolName: "infinity", accessibilityDescription: "LayoutBuddy") {
             img.isTemplate = true // adopt menu bar tint (auto light/dark)
@@ -95,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Menubar UI
 
     private func rebuildMenu() {
+        guard let statusItem = statusItem else { return }
         let menu = NSMenu()
         let quitItem = NSMenuItem(title: "Quit LayoutBuddy", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
@@ -136,7 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Badge
 
     private func updateStatusTitleAndColor() {
-        guard let button = statusItem.button else { return }
+        guard let button = statusItem?.button else { return }
         // No text label in the menubar:
         button.title = ""                          // clear any plain title
         button.attributedTitle = NSAttributedString(string: "")
