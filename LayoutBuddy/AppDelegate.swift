@@ -331,7 +331,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let otherLangPrefix = (curLangPrefix == "en") ? "uk" : "en"
 
         // NEW: split trailing terminal punctuation from the buffered word
-        let (core, trailingCount) = splitTrailingMapped(wordBuffer)
+        let (core, _) = splitTrailingMapped(wordBuffer)
         let suspiciousEN = (curLangPrefix == "en") && containsSuspiciousMapped(core)
 
         guard let curSpell = bestSpellLang(for: curLangPrefix),
