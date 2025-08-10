@@ -329,6 +329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let curID = currentInputSourceID()
         let curLangPrefix = isLayoutUkrainian(curID) ? "uk" : "en"
         let otherLangPrefix = (curLangPrefix == "en") ? "uk" : "en"
+        let suspiciousEN = (curLangPrefix == "en") && containsLetterLikePunct(wordBuffer)
 
         guard let curSpell = bestSpellLang(for: curLangPrefix),
               let otherSpell = bestSpellLang(for: otherLangPrefix) else {
@@ -336,7 +337,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        if isSpelledCorrect(wordBuffer, language: curSpell) {
+        if !suspiciousEN && isSpelledCorrect(wordBuffer, language: curSpell) {
             wordBuffer = ""
             return
         }
@@ -371,8 +372,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Word utils + spellcheck
 
     private func isBoundary(_ s: UnicodeScalar) -> Bool {
+        if isWordInternal(s) { return false } // NEW: keep apostrophes & hyphens inside words
         if CharacterSet.whitespacesAndNewlines.contains(s) { return true }
-        let punct = ".,;:!?()[]{}<>/\\\"'“”‘’—–-_|@#€$%^&*+=`~"
+        let punct = ".,;:!?()[]{}<>/\\\"“”‘’—–_|@#€$%^&*+=`~"
         return punct.unicodeScalars.contains(s)
     }
 
@@ -548,8 +550,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func isAllCyrillic(_ s: String) -> Bool {
         s.unicodeScalars.allSatisfy { isCyrillicLetter($0) }
     }
+    
+    // Characters that are allowed inside words (don’t break the buffer)
+    private let wordInternalScalars = Set("'’-".unicodeScalars) // ASCII ', Unicode ’, hyphen-minus -
 
-
+    private func isWordInternal(_ s: UnicodeScalar) -> Bool {
+        wordInternalScalars.contains(s)
+    }
 
     // EN -> UK (Ukrainian standard)
     private let en2uk: [Character: String] = [
