@@ -15,7 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @inline(__always)
     private func dlog(_ msg: @autoclosure () -> String) {
         #if DEBUG
-        if enableDiagnostics { dlog(msg()) }
+        if enableDiagnostics { Swift.print(msg()) }
         #endif
     }
 
