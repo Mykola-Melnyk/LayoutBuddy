@@ -293,22 +293,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return Unmanaged.passUnretained(event)
         }
 
-        // 1) Boundary => evaluate buffered word, keep the boundary char
+        // Treat letter-ish first:
+        // - Latin or Cyrillic letters
+        // - OR (when current layout is Latin) ABC-keys that become UA letters: [];',.
+        let currentIsLatin = isLayoutLatin(currentInputSourceID())
+        if isLatinLetter(scalar) || isCyrillicLetter(scalar) || (currentIsLatin && isMappedLatinPunctuation(scalar)) {
+            wordBuffer.unicodeScalars.append(scalar)
+            return Unmanaged.passUnretained(event)
+        }
+
+        // Boundary => evaluate buffered word, keep the boundary char
         if isBoundary(scalar) {
             processBufferedWordIfNeeded(keepFollowingBoundary: true)
             return Unmanaged.passUnretained(event)
         }
 
-        // 2) Letters extend the current word
-        if isLatinLetter(scalar) || isCyrillicLetter(scalar) {
-            wordBuffer.unicodeScalars.append(scalar)
-            return Unmanaged.passUnretained(event)
-        }
-
-        // 3) Other (digits/symbols) — treat like boundary but keep that char
+        // Other (digits/symbols) — treat like boundary but keep that char
         processBufferedWordIfNeeded(keepFollowingBoundary: true)
         return Unmanaged.passUnretained(event)
     }
+
 
     private func processBufferedWordIfNeeded(keepFollowingBoundary: Bool = false) {
         guard !wordBuffer.isEmpty else { return }
@@ -330,7 +334,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let converted = convert(wordBuffer, from: curLangPrefix, to: otherLangPrefix)
 
+        var shouldReplace = false
+
+        // Primary rule: converted word is valid in the other language
         if !converted.isEmpty, isSpelledCorrect(converted, language: otherSpell) {
+            shouldReplace = true
+        } else {
+            // Fallback rule: clearly typed on ABC (Latin) using UA positions
+            if curLangPrefix == "en", containsLetterLikePunct(wordBuffer), isAllCyrillic(converted) {
+                shouldReplace = true
+            }
+        }
+        if shouldReplace {
             replaceLastWord(
                 with: converted,
                 targetLangPrefix: otherLangPrefix,
@@ -339,6 +354,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             playSwitchSound()
             updateStatusTitleAndColor()
         }
+
 
         wordBuffer = ""
     }
@@ -510,6 +526,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         return out
     }
+    
+    // EN→UK letter keys that look like punctuation on ABC
+    private let letterLikePunctScalars = Set("[];',.".unicodeScalars)
+    private func isMappedLatinPunctuation(_ s: UnicodeScalar) -> Bool {
+        letterLikePunctScalars.contains(s)
+    }
+    
+    private func containsLetterLikePunct(_ s: String) -> Bool {
+        s.unicodeScalars.contains { letterLikePunctScalars.contains($0) }
+    }
+    private func isAllCyrillic(_ s: String) -> Bool {
+        s.unicodeScalars.allSatisfy { isCyrillicLetter($0) }
+    }
+
+
 
     // EN -> UK (Ukrainian standard)
     private let en2uk: [Character: String] = [
