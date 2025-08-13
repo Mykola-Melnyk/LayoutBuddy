@@ -859,6 +859,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
+#if DEBUG
+    // MARK: - Testing helpers
+    /// Expose the internal word buffer for unit tests.
+    func test_setWordBuffer(_ text: String) { wordBuffer = text }
+    func test_getWordBuffer() -> String { wordBuffer }
+
+    /// Forward key events into the private handler for unit tests.
+    func test_handleKeyEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        handleKeyEvent(type: type, event: event)
+    }
+#endif
 }
 
 #if DEBUG
