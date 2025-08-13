@@ -333,6 +333,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Ignore other Cmd/Ctrl shortcuts (let plain Alt combos pass)
         if hasCmd || hasCtrl { return Unmanaged.passUnretained(event) }
 
+        // Backspace/delete edits the current word buffer without triggering processing
+        if keyCode == CGKeyCode(kVK_Delete) || keyCode == CGKeyCode(kVK_ForwardDelete) {
+            if hasAlt {
+                wordBuffer = ""
+            } else if !wordBuffer.isEmpty {
+                wordBuffer.unicodeScalars.removeLast()
+            }
+            return Unmanaged.passUnretained(event)
+        }
+
         // Decode typed scalar
         var buf = [UniChar](repeating: 0, count: 4)
         var len = 0
