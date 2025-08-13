@@ -20,10 +20,10 @@ struct LayoutBuddyTests {
         let app = AppDelegate()
 
         // Simulate Delete key removing last character
-        app.testWordBuffer = "word"
+        app.testWordBuffer = "word.x"
         let deleteEvent = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(kVK_Delete), keyDown: true)!
         let resultDelete = app.testHandleKeyEvent(type: .keyDown, event: deleteEvent)
-        #expect(app.testWordBuffer == "wor")
+        #expect(app.testWordBuffer == "word.")
         #expect(resultDelete?.takeUnretainedValue() === deleteEvent)
 
         // Simulate Forward Delete key removing last character
