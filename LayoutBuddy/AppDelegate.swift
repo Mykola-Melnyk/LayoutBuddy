@@ -587,7 +587,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - EN ⇄ UK keyboard-position mapping
 
-    private func convert(_ word: String, from src: String, to dst: String) -> String {
+    func convert(_ word: String, from src: String, to dst: String) -> String {
         if src == "en", dst == "uk" { return mapWord(word, using: en2uk) }
         if src == "uk", dst == "en" { return mapWord(word, using: uk2en) }
         return word

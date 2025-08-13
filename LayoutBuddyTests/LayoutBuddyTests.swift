@@ -10,8 +10,11 @@ import Testing
 
 struct LayoutBuddyTests {
 
-    @Test func example() async throws {
-        // Write your test here and use APIs like `#expect(...)` to check expected conditions.
+    @Test func ukrainianWordConversionProducesAsciiApostrophe() throws {
+        let delegate = AppDelegate()
+        let result = delegate.convert("п’ять", from: "uk", to: "en")
+        #expect(result == "g'znm")
+        #expect(result.contains("'"))
     }
 
 }
