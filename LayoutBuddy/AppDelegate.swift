@@ -348,6 +348,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return Unmanaged.passUnretained(event)
         }
 
+        // Keep email addresses untouched — '@' should not trigger auto-switching
+        if scalar == UnicodeScalar(64) { // '@'
+            wordBuffer = ""
+            bumpWordsAhead()
+            return Unmanaged.passUnretained(event)
+        }
+
         // Boundary → evaluate buffered word, keep boundary char
         if isBoundary(scalar) {
             processBufferedWordIfNeeded(keepFollowingBoundary: true)
