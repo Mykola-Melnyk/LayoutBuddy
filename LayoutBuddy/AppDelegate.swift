@@ -860,3 +860,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 }
+
+#if DEBUG
+extension AppDelegate {
+    /// Exposes the private `wordBuffer` for testing.
+    var testWordBuffer: String {
+        get { wordBuffer }
+        set { wordBuffer = newValue }
+    }
+
+    /// Wrapper to access the private `handleKeyEvent` in tests.
+    func testHandleKeyEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        handleKeyEvent(type: type, event: event)
+    }
+}
+#endif
