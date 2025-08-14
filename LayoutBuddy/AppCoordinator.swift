@@ -430,7 +430,7 @@ final class AppCoordinator: NSObject {
     // Ensure layout really switched before typing
     private func ensureSwitch(to targetID: String, attempts: Int = 12, done: @escaping () -> Void) {
         func attempt(_ n: Int) {
-            self.layoutManager.switch(to: targetID)
+            self.layoutManager.switchLayout(to: targetID)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 if self.layoutManager.currentInputSourceID() == targetID || n >= attempts { done() }
                 else { attempt(n + 1) }

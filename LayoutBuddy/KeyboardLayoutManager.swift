@@ -51,10 +51,11 @@ final class KeyboardLayoutManager {
     func toggleLayout() {
         let current = currentInputSourceID()
         let target = (current == preferences.secondaryID) ? preferences.primaryID : preferences.secondaryID
-        switch(to: target)
+        switchLayout(to: target)
     }
 
-    func switch(to id: String) {
+    /// Switches the current keyboard layout to the specified input source ID.
+    func switchLayout(to id: String) {
         switchToInputSource(id: id)
     }
 
