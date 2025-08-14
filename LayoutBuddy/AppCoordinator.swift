@@ -7,6 +7,7 @@ final class AppCoordinator: NSObject {
 
     // MARK: - State
 
+    private let preferences: LayoutPreferences
     private var statusItem: NSStatusItem?
     
     // Toggle diagnostics here
@@ -49,21 +50,12 @@ final class AppCoordinator: NSObject {
     private let ambiguityMax = 5
     private let contextRadius = 8
 
-    // MARK: - Preferences (primary / secondary layouts)
-
-    private let kPrimaryIDKey = "PrimaryInputSourceID"
-    private let kSecondaryIDKey = "SecondaryInputSourceID"
-
-    private var primaryID: String {
-        get { UserDefaults.standard.string(forKey: kPrimaryIDKey) ?? autoDetectPrimaryID() }
-        set { UserDefaults.standard.set(newValue, forKey: kPrimaryIDKey) }
-    }
-    private var secondaryID: String {
-        get { UserDefaults.standard.string(forKey: kSecondaryIDKey) ?? autoDetectSecondaryID() }
-        set { UserDefaults.standard.set(newValue, forKey: kSecondaryIDKey) }
-    }
-
     // MARK: - App lifecycle
+
+    init(preferences: LayoutPreferences = LayoutPreferences()) {
+        self.preferences = preferences
+        super.init()
+    }
 
     func start() {
         NSApp.setActivationPolicy(.accessory)
@@ -106,8 +98,10 @@ final class AppCoordinator: NSObject {
 
     @objc private func setAsPrimary(_ sender: NSMenuItem) {
         if let id = sender.representedObject as? String {
-            primaryID = id
-            if secondaryID == primaryID { secondaryID = autoDetectSecondaryID() }
+            preferences.primaryID = id
+            if preferences.secondaryID == preferences.primaryID {
+                preferences.secondaryID = preferences.autoDetectSecondaryID()
+            }
             playSwitchSound()
             rebuildMenu()
             updateStatusTitleAndColor()
@@ -115,8 +109,8 @@ final class AppCoordinator: NSObject {
     }
 
     @objc private func setAsSecondary(_ sender: NSMenuItem) {
-        if let id = sender.representedObject as? String, id != primaryID {
-            secondaryID = id
+        if let id = sender.representedObject as? String, id != preferences.primaryID {
+            preferences.secondaryID = id
             playSwitchSound()
             rebuildMenu()
             updateStatusTitleAndColor()
@@ -128,8 +122,8 @@ final class AppCoordinator: NSObject {
     // MARK: - Toggle
 
     @objc private func toggleLayout() {
-        let current = currentInputSourceID()
-        let target = (current == secondaryID) ? primaryID : secondaryID
+        let current = preferences.currentInputSourceID()
+        let target = (current == preferences.secondaryID) ? preferences.primaryID : preferences.secondaryID
         switchToInputSource(id: target)
         playSwitchSound()
         updateStatusTitleAndColor()
@@ -143,64 +137,27 @@ final class AppCoordinator: NSObject {
         button.title = ""                          // clear any plain title
         button.attributedTitle = NSAttributedString(string: "")
         // Keep a tooltip with the current layout's full name:
-        let curID = currentInputSourceID()
+        let curID = preferences.currentInputSourceID()
         button.toolTip = fullName(for: curID)      // e.g., "U.S." or "Ukrainian - PC"
         // (Optional) If you ever want tint by layout, set:
-        // button.contentTintColor = isLanguage(id: curID, hasPrefix: "uk") ? .systemBlue : .labelColor
+        // button.contentTintColor = preferences.isLanguage(id: curID, hasPrefix: "uk") ? .systemBlue : .labelColor
     }
 
 
     private func shortName(for id: String) -> String {
-        if isLanguage(id: id, hasPrefix: "uk") { return "UKR" }
-        if isLanguage(id: id, hasPrefix: "en") { return "EN" }
-        let name = inputSourceInfo(for: id)?.name ?? "???"
+        if preferences.isLanguage(id: id, hasPrefix: "uk") { return "UKR" }
+        if preferences.isLanguage(id: id, hasPrefix: "en") { return "EN" }
+        let name = preferences.inputSourceInfo(for: id)?.name ?? "???"
         return String(name.prefix(3)).uppercased()
     }
 
     private func fullName(for id: String) -> String {
-        inputSourceInfo(for: id)?.name ?? id
-    }
-
-    private func isLanguage(id: String, hasPrefix prefix: String) -> Bool {
-        inputSourceInfo(for: id)?.languages.contains(where: { $0.hasPrefix(prefix) }) ?? false
+        preferences.inputSourceInfo(for: id)?.name ?? id
     }
 
     private func playSwitchSound() { NSSound.beep() }
 
     // MARK: - Input source helpers (Carbon/TIS)
-
-    private struct InputSourceInfo {
-        let id: String
-        let name: String
-        let languages: [String]
-    }
-
-    private func listSelectableKeyboardLayouts() -> [InputSourceInfo] {
-        let query: [CFString: Any] = [
-            kTISPropertyInputSourceCategory: kTISCategoryKeyboardInputSource as CFString,
-            kTISPropertyInputSourceIsSelectCapable: true
-        ]
-        guard let list = TISCreateInputSourceList(query as CFDictionary, false)?
-            .takeRetainedValue() as? [TISInputSource] else { return [] }
-
-        let infos = list.compactMap { src -> InputSourceInfo? in
-            let id = (tisProperty(src, kTISPropertyInputSourceID) as? String) ?? ""
-            guard !id.isEmpty else { return nil }
-            let name = (tisProperty(src, kTISPropertyLocalizedName) as? String) ?? id
-            let langs = (tisProperty(src, kTISPropertyInputSourceLanguages) as? [String]) ?? []
-            return InputSourceInfo(id: id, name: name, languages: langs)
-        }
-        return infos.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-    }
-
-    private func inputSourceInfo(for id: String) -> InputSourceInfo? {
-        listSelectableKeyboardLayouts().first(where: { $0.id == id })
-    }
-
-    private func currentInputSourceID() -> String {
-        guard let cur = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else { return "" }
-        return (tisProperty(cur, kTISPropertyInputSourceID) as? String) ?? ""
-    }
 
     private func switchToInputSource(id: String) {
         let query: [CFString: Any] = [
@@ -216,32 +173,6 @@ final class AppCoordinator: NSObject {
         }
     }
 
-    private func tisProperty(_ src: TISInputSource, _ key: CFString) -> AnyObject? {
-        guard let ptr = TISGetInputSourceProperty(src, key) else { return nil }
-        return Unmanaged<AnyObject>.fromOpaque(ptr).takeUnretainedValue()
-    }
-
-    private func autoDetectPrimaryID() -> String {
-        let current = currentInputSourceID()
-        if !current.isEmpty { return current }
-        let all = listSelectableKeyboardLayouts()
-        if let us = all.first(where: { $0.id == "com.apple.keylayout.US" }) { return us.id }
-        if let abc = all.first(where: { $0.id == "com.apple.keylayout.ABC" }) { return abc.id }
-        return all.first?.id ?? "com.apple.keylayout.US"
-    }
-
-    private func autoDetectSecondaryID() -> String {
-        let primary = primaryID
-        let all = listSelectableKeyboardLayouts()
-        let primaryLang = all.first(where: { $0.id == primary })?.languages.first ?? ""
-        let desiredPrefix = primaryLang.hasPrefix("en") ? "uk" : "en"
-        if let differentLang = all.first(where: {
-            $0.languages.contains(where: { $0.hasPrefix(desiredPrefix) }) && $0.id != primary
-        }) {
-            return differentLang.id
-        }
-        return all.first(where: { $0.id != primary })?.id ?? primary
-    }
 
     // MARK: - Event tap
 
@@ -352,7 +283,7 @@ final class AppCoordinator: NSObject {
         }
 
         // Letters & ABC-keys-that-map-to-UA-letters → extend current word
-        let currentIsLatin = isLayoutLatin(currentInputSourceID())
+        let currentIsLatin = isLayoutLatin(preferences.currentInputSourceID())
         if isLatinLetter(scalar) || isCyrillicLetter(scalar) || (currentIsLatin && isMappedLatinPunctuation(scalar)) {
             wordBuffer.unicodeScalars.append(scalar)
             return Unmanaged.passUnretained(event)
@@ -406,7 +337,7 @@ final class AppCoordinator: NSObject {
     private func processBufferedWordIfNeeded(keepFollowingBoundary: Bool = false) {
         guard !wordBuffer.isEmpty else { return }
 
-        let curID = currentInputSourceID()
+        let curID = preferences.currentInputSourceID()
         let curLangPrefix = isLayoutUkrainian(curID) ? "uk" : "en"
         let otherLangPrefix = (curLangPrefix == "en") ? "uk" : "en"
 
@@ -543,7 +474,7 @@ final class AppCoordinator: NSObject {
         func attempt(_ n: Int) {
             self.switchToInputSource(id: targetID)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                if self.currentInputSourceID() == targetID || n >= attempts { done() }
+                if self.preferences.currentInputSourceID() == targetID || n >= attempts { done() }
                 else { attempt(n + 1) }
             }
         }
@@ -551,34 +482,34 @@ final class AppCoordinator: NSObject {
     }
 
     private func otherLayoutID() -> String {
-        let cur = currentInputSourceID()
-        return (cur == primaryID) ? secondaryID : primaryID
+        let cur = preferences.currentInputSourceID()
+        return (cur == preferences.primaryID) ? preferences.secondaryID : preferences.primaryID
     }
 
     private func layoutID(forLanguagePrefix prefix: String) -> String? {
         if prefix == "uk" {
-            if isLayoutUkrainian(primaryID) { return primaryID }
-            if isLayoutUkrainian(secondaryID) { return secondaryID }
+            if isLayoutUkrainian(preferences.primaryID) { return preferences.primaryID }
+            if isLayoutUkrainian(preferences.secondaryID) { return preferences.secondaryID }
             return nil
         } else {
-            if isLayoutLatin(primaryID) { return primaryID }
-            if isLayoutLatin(secondaryID) { return secondaryID }
+            if isLayoutLatin(preferences.primaryID) { return preferences.primaryID }
+            if isLayoutLatin(preferences.secondaryID) { return preferences.secondaryID }
             return nil
         }
     }
 
     private func isLayoutUkrainian(_ id: String) -> Bool {
-        if isLanguage(id: id, hasPrefix: "uk") { return true }
-        let name = inputSourceInfo(for: id)?.name.lowercased() ?? ""
+        if preferences.isLanguage(id: id, hasPrefix: "uk") { return true }
+        let name = preferences.inputSourceInfo(for: id)?.name.lowercased() ?? ""
         return name.contains("ukrainian") || name.contains("україн")
     }
 
     private func isLayoutLatin(_ id: String) -> Bool {
-        let langs = inputSourceInfo(for: id)?.languages ?? []
+        let langs = preferences.inputSourceInfo(for: id)?.languages ?? []
         if langs.contains(where: { $0.hasPrefix("en") }) { return true }
         if langs.contains(where: { $0.localizedCaseInsensitiveContains("latn") }) { return true }
         if langs.contains(where: { $0.hasPrefix("mul") }) { return true } // ABC often mul-Latn
-        let name = inputSourceInfo(for: id)?.name.lowercased() ?? ""
+        let name = preferences.inputSourceInfo(for: id)?.name.lowercased() ?? ""
         if name.contains("abc") || name.contains("u.s.") || name == "us" { return true }
         let idLower = id.lowercased()
         if idLower.contains("com.apple.keylayout.abc") || idLower.contains("com.apple.keylayout.us") { return true }
