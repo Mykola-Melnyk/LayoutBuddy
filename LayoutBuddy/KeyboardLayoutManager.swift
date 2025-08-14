@@ -17,21 +17,23 @@ final class KeyboardLayoutManager {
     }
 
     func listSelectableKeyboardLayouts() -> [InputSourceInfo] {
-        let query: [CFString: Any] = [
-            kTISPropertyInputSourceCategory: kTISCategoryKeyboardInputSource as CFString,
-            kTISPropertyInputSourceIsSelectCapable: true
-        ]
-        guard let list = TISCreateInputSourceList(query as CFDictionary, false)?
-            .takeRetainedValue() as? [TISInputSource] else { return [] }
+        onMain {
+            let query: [CFString: Any] = [
+                kTISPropertyInputSourceCategory: kTISCategoryKeyboardInputSource as CFString,
+                kTISPropertyInputSourceIsSelectCapable: true
+            ]
+            guard let list = TISCreateInputSourceList(query as CFDictionary, false)?
+                .takeRetainedValue() as? [TISInputSource] else { return [] }
 
-        let infos = list.compactMap { src -> InputSourceInfo? in
-            let id = (tisProperty(src, kTISPropertyInputSourceID) as? String) ?? ""
-            guard !id.isEmpty else { return nil }
-            let name = (tisProperty(src, kTISPropertyLocalizedName) as? String) ?? id
-            let langs = (tisProperty(src, kTISPropertyInputSourceLanguages) as? [String]) ?? []
-            return InputSourceInfo(id: id, name: name, languages: langs)
+            let infos = list.compactMap { src -> InputSourceInfo? in
+                let id = (tisProperty(src, kTISPropertyInputSourceID) as? String) ?? ""
+                guard !id.isEmpty else { return nil }
+                let name = (tisProperty(src, kTISPropertyLocalizedName) as? String) ?? id
+                let langs = (tisProperty(src, kTISPropertyInputSourceLanguages) as? [String]) ?? []
+                return InputSourceInfo(id: id, name: name, languages: langs)
+            }
+            return infos.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         }
-        return infos.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     func inputSourceInfo(for id: String) -> InputSourceInfo? {
@@ -43,8 +45,10 @@ final class KeyboardLayoutManager {
     }
 
     func currentInputSourceID() -> String {
-        guard let cur = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else { return "" }
-        return (tisProperty(cur, kTISPropertyInputSourceID) as? String) ?? ""
+        onMain {
+            guard let cur = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else { return "" }
+            return (tisProperty(cur, kTISPropertyInputSourceID) as? String) ?? ""
+        }
     }
 
     // MARK: - Switching
@@ -60,16 +64,18 @@ final class KeyboardLayoutManager {
     }
 
     private func switchToInputSource(id: String) {
-        let query: [CFString: Any] = [
-            kTISPropertyInputSourceID: id,
-            kTISPropertyInputSourceCategory: kTISCategoryKeyboardInputSource as CFString,
-            kTISPropertyInputSourceIsSelectCapable: true
-        ]
-        if let list = TISCreateInputSourceList(query as CFDictionary, false)?
-            .takeRetainedValue() as? [TISInputSource],
-           let target = list.first {
-            TISEnableInputSource(target)
-            TISSelectInputSource(target)
+        onMain {
+            let query: [CFString: Any] = [
+                kTISPropertyInputSourceID: id,
+                kTISPropertyInputSourceCategory: kTISCategoryKeyboardInputSource as CFString,
+                kTISPropertyInputSourceIsSelectCapable: true
+            ]
+            if let list = TISCreateInputSourceList(query as CFDictionary, false)?
+                .takeRetainedValue() as? [TISInputSource],
+               let target = list.first {
+                TISEnableInputSource(target)
+                TISSelectInputSource(target)
+            }
         }
     }
 
@@ -77,5 +83,13 @@ final class KeyboardLayoutManager {
     private func tisProperty(_ src: TISInputSource, _ key: CFString) -> AnyObject? {
         guard let ptr = TISGetInputSourceProperty(src, key) else { return nil }
         return Unmanaged<AnyObject>.fromOpaque(ptr).takeUnretainedValue()
+    }
+
+    private func onMain<T>(_ block: () -> T) -> T {
+        if Thread.isMainThread {
+            return block()
+        } else {
+            return DispatchQueue.main.sync(execute: block)
+        }
     }
 }
