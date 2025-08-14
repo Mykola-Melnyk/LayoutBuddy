@@ -8,7 +8,7 @@
 import Testing
 import Carbon
 import ApplicationServices
-@testable import LayoutBuddy
+@testable @preconcurrency import LayoutBuddy
 import Foundation
 
 @MainActor
