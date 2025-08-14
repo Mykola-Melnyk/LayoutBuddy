@@ -8,7 +8,7 @@ final class AppCoordinator: NSObject {
     // MARK: - State
 
     private let preferences: LayoutPreferences
-    private var statusItem: NSStatusItem?
+    private let menuBar: MenuBarController
     
     // Toggle diagnostics here
     private let enableDiagnostics = false
@@ -55,27 +55,36 @@ final class AppCoordinator: NSObject {
 
     init(preferences: LayoutPreferences = LayoutPreferences()) {
         self.preferences = preferences
+        self.menuBar = MenuBarController(preferences: preferences)
         super.init()
+
+        menuBar.onSetAsPrimary = { [weak self] id in
+            guard let self else { return }
+            self.preferences.primaryID = id
+            if self.preferences.secondaryID == self.preferences.primaryID {
+                self.preferences.secondaryID = self.preferences.autoDetectSecondaryID()
+            }
+            self.playSwitchSound()
+            self.menuBar.rebuildMenu()
+            self.menuBar.updateStatusTitleAndColor()
+        }
+
+        menuBar.onSetAsSecondary = { [weak self] id in
+            guard let self else { return }
+            self.preferences.secondaryID = id
+            self.playSwitchSound()
+            self.menuBar.rebuildMenu()
+            self.menuBar.updateStatusTitleAndColor()
+        }
+
+        menuBar.onQuit = {
+            NSApplication.shared.terminate(nil)
+        }
     }
 
     func start() {
         NSApp.setActivationPolicy(.accessory)
-
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        guard let statusItem = statusItem else { return }
-        // Menu bar icon: ∞
-        if let img = NSImage(systemSymbolName: "infinity", accessibilityDescription: "LayoutBuddy") {
-            img.isTemplate = true // adopt menu bar tint (auto light/dark)
-            statusItem.button?.image = img
-            statusItem.button?.imagePosition = .imageOnly
-        } else {
-            // Fallback if SF Symbol unavailable (very old macOS): still icon-only
-            statusItem.button?.title = "∞"
-            statusItem.button?.imagePosition = .noImage
-        }
-
-        rebuildMenu()
-        updateStatusTitleAndColor()
+        menuBar.updateStatusTitleAndColor()
         setupEventTap()
     }
 
@@ -86,40 +95,6 @@ final class AppCoordinator: NSObject {
         runLoopSrc = nil
     }
 
-    // MARK: - Menubar UI
-
-    private func rebuildMenu() {
-        guard let statusItem = statusItem else { return }
-        let menu = NSMenu()
-        let quitItem = NSMenuItem(title: "Quit LayoutBuddy", action: #selector(quit), keyEquivalent: "q")
-        quitItem.target = self
-        menu.addItem(quitItem)
-        statusItem.menu = menu
-    }
-
-    @objc private func setAsPrimary(_ sender: NSMenuItem) {
-        if let id = sender.representedObject as? String {
-            preferences.primaryID = id
-            if preferences.secondaryID == preferences.primaryID {
-                preferences.secondaryID = preferences.autoDetectSecondaryID()
-            }
-            playSwitchSound()
-            rebuildMenu()
-            updateStatusTitleAndColor()
-        }
-    }
-
-    @objc private func setAsSecondary(_ sender: NSMenuItem) {
-        if let id = sender.representedObject as? String, id != preferences.primaryID {
-            preferences.secondaryID = id
-            playSwitchSound()
-            rebuildMenu()
-            updateStatusTitleAndColor()
-        }
-    }
-
-    @objc private func quit() { NSApplication.shared.terminate(nil) }
-
     // MARK: - Toggle
 
     @objc private func toggleLayout() {
@@ -127,34 +102,10 @@ final class AppCoordinator: NSObject {
         let target = (current == preferences.secondaryID) ? preferences.primaryID : preferences.secondaryID
         switchToInputSource(id: target)
         playSwitchSound()
-        updateStatusTitleAndColor()
+        menuBar.updateStatusTitleAndColor()
     }
 
-    // MARK: - Badge
-
-    private func updateStatusTitleAndColor() {
-        guard let button = statusItem?.button else { return }
-        // No text label in the menubar:
-        button.title = ""                          // clear any plain title
-        button.attributedTitle = NSAttributedString(string: "")
-        // Keep a tooltip with the current layout's full name:
-        let curID = preferences.currentInputSourceID()
-        button.toolTip = fullName(for: curID)      // e.g., "U.S." or "Ukrainian - PC"
-        // (Optional) If you ever want tint by layout, set:
-        // button.contentTintColor = preferences.isLanguage(id: curID, hasPrefix: "uk") ? .systemBlue : .labelColor
-    }
-
-
-    private func shortName(for id: String) -> String {
-        if preferences.isLanguage(id: id, hasPrefix: "uk") { return "UKR" }
-        if preferences.isLanguage(id: id, hasPrefix: "en") { return "EN" }
-        let name = preferences.inputSourceInfo(for: id)?.name ?? "???"
-        return String(name.prefix(3)).uppercased()
-    }
-
-    private func fullName(for id: String) -> String {
-        preferences.inputSourceInfo(for: id)?.name ?? id
-    }
+    // MARK: - Feedback
 
     private func playSwitchSound() { NSSound.beep() }
 
@@ -385,7 +336,7 @@ final class AppCoordinator: NSObject {
             } else if !curOK && otherOK {
                 replaceLastWord(with: converted1, targetLangPrefix: otherLangPrefix,
                                 keepFollowingBoundary: keepFollowingBoundary, deleteCountOverride: core.count)
-                playSwitchSound(); updateStatusTitleAndColor()
+                playSwitchSound(); menuBar.updateStatusTitleAndColor()
                 wordBuffer = ""; return
             } else {
                 wordBuffer = ""; return
@@ -414,7 +365,7 @@ final class AppCoordinator: NSObject {
         if shouldReplace {
             replaceLastWord(with: convertedCore, targetLangPrefix: otherLangPrefix,
                             keepFollowingBoundary: keepFollowingBoundary, deleteCountOverride: core.count)
-            playSwitchSound(); updateStatusTitleAndColor()
+            playSwitchSound(); menuBar.updateStatusTitleAndColor()
         }
 
         wordBuffer = ""
@@ -443,7 +394,7 @@ final class AppCoordinator: NSObject {
             self.ensureSwitch(to: targetID) {
                 self.typeUnicode(newWord)
                 if keepFollowingBoundary { self.tapKey(.rightArrow) }
-                self.updateStatusTitleAndColor()
+                self.menuBar.updateStatusTitleAndColor()
                 self.isSynthesizing = false
             }
         }
@@ -772,7 +723,7 @@ final class AppCoordinator: NSObject {
                 if !ok {
                     fallbackTypeOverSelection(el: el, text: cand.converted, restoreCaretTo: newCaret)
                 } else {
-                    playSwitchSound(); updateStatusTitleAndColor()
+            playSwitchSound(); menuBar.updateStatusTitleAndColor()
                 }
                 return
             }
@@ -787,7 +738,7 @@ final class AppCoordinator: NSObject {
         typeUnicode(text)
         _ = axSetSelectedRange(el, NSRange(location: max(0, pos), length: 0))
         isSynthesizing = false
-        playSwitchSound(); updateStatusTitleAndColor()
+        playSwitchSound(); menuBar.updateStatusTitleAndColor()
     }
 
     private func fallbackNavigateAndReplace(_ cand: AmbiguousCandidate) {
@@ -808,7 +759,7 @@ final class AppCoordinator: NSObject {
                 self.typeUnicode(cand.converted)
                 // Return caret to where it was
                 for _ in 0..<stepsLeft { self.optRight() }
-                self.updateStatusTitleAndColor()
+                self.menuBar.updateStatusTitleAndColor()
                 self.playSwitchSound()
                 self.isSynthesizing = false
             }
