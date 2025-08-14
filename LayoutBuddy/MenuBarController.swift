@@ -11,9 +11,32 @@ final class MenuBarController: NSObject {
 
     init(layoutManager: KeyboardLayoutManager) {
         self.layoutManager = layoutManager
-        self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        // NSStatusItem (and the underlying window it uses) must be
+        // created on the main thread.  In tests or other contexts this
+        // initializer might be invoked from a background queue, so make
+        // sure the status item creation always happens on the main
+        // thread.
+        self.statusItem = Self.createStatusItem()
         super.init()
-        setupStatusItem()
+
+        // Further UI setup must also run on the main thread.
+        if Thread.isMainThread {
+            setupStatusItem()
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.setupStatusItem()
+            }
+        }
+    }
+
+    private static func createStatusItem() -> NSStatusItem {
+        if Thread.isMainThread {
+            return NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        } else {
+            return DispatchQueue.main.sync {
+                NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            }
+        }
     }
 
     private func setupStatusItem() {
