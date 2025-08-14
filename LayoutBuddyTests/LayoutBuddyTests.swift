@@ -153,6 +153,7 @@ struct LayoutBuddyTests {
         let expected = app.convert(ukWord, from: "uk", to: "en")
 
         var typed = ""
+        let typedQueue = DispatchQueue(label: "typed.queue")
 
         // Type all but last letter
         for scalar in ukWord.unicodeScalars.dropLast() {
@@ -163,37 +164,42 @@ struct LayoutBuddyTests {
             var ch: UniChar = UniChar(scalar.value)
             event.keyboardSetUnicodeString(stringLength: 1, unicodeString: &ch)
             _ = app.testHandleKeyEvent(type: .keyDown, event: event)
-            typed.append(Character(UnicodeScalar(ch)!))
+            typedQueue.sync { typed.append(Character(UnicodeScalar(ch)!)) }
         }
 
         // Delay the last letter to simulate race
         let group = DispatchGroup()
+        let semaphore = DispatchSemaphore(value: 0)
+
         group.enter()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        DispatchQueue.global().async {
+            semaphore.wait()
             if let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) {
                 var ch: UniChar = UniChar(ukWord.unicodeScalars.last!.value)
                 event.keyboardSetUnicodeString(stringLength: 1, unicodeString: &ch)
                 _ = app.testHandleKeyEvent(type: .keyDown, event: event)
-                typed.append(Character(UnicodeScalar(ch)!))
+                typedQueue.sync { typed.append(Character(UnicodeScalar(ch)!)) }
             }
             group.leave()
         }
 
-        // Process buffered word before the delayed letter arrives
+        // Process buffered word before the delayed letter is allowed to arrive
         let before = app.testWordBuffer
         app.testProcessBufferedWordIfNeeded()
         let convertedBefore = app.convert(before, from: "uk", to: "en")
-        typed = String(typed.dropLast(before.count)) + convertedBefore
+        typedQueue.sync { typed = String(typed.dropLast(before.count)) + convertedBefore }
 
-        // Wait for the delayed letter to be inserted
+        // Release the delayed letter and wait for its insertion
+        semaphore.signal()
         group.wait()
 
         // Process again after the last letter is present
         let after = app.testWordBuffer
         app.testProcessBufferedWordIfNeeded()
         let convertedAfter = app.convert(after, from: "uk", to: "en")
-        typed = String(typed.dropLast(after.count)) + convertedAfter
+        typedQueue.sync { typed = String(typed.dropLast(after.count)) + convertedAfter }
 
-        #expect(typed == expected)
+        let finalTyped = typedQueue.sync { typed }
+        #expect(finalTyped == expected)
     }
 }
