@@ -773,5 +773,10 @@ extension AppCoordinator {
     func testHandleKeyEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         handleKeyEvent(type: type, event: event)
     }
+
+    /// Expose the private `processBufferedWordIfNeeded` for unit tests.
+    func testProcessBufferedWordIfNeeded(keepFollowingBoundary: Bool = false) {
+        processBufferedWordIfNeeded(keepFollowingBoundary: keepFollowingBoundary)
+    }
 }
 #endif

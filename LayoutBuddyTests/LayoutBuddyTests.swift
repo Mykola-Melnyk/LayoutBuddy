@@ -10,6 +10,7 @@ import ApplicationServices
 @testable import LayoutBuddy
 import Carbon
 import ApplicationServices
+import Foundation
 
 struct LayoutBuddyTests {
 
@@ -144,5 +145,55 @@ struct LayoutBuddyTests {
         nEvent.keyboardSetUnicodeString(stringLength: 1, unicodeString: &n)
         _ = app.testHandleKeyEvent(type: .keyDown, event: nEvent)
         #expect(app.testWordBuffer == "n")
+    }
+
+    @Test func testDelayedLastLetterProducesSingleConvertedWord() throws {
+        let app = AppCoordinator()
+        let ukWord = "привіт"
+        let expected = app.convert(ukWord, from: "uk", to: "en")
+
+        var typed = ""
+
+        // Type all but last letter
+        for scalar in ukWord.unicodeScalars.dropLast() {
+            guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
+                #expect(Bool(false), "Unable to create CGEvent for testing")
+                return
+            }
+            var ch: UniChar = UniChar(scalar.value)
+            event.keyboardSetUnicodeString(stringLength: 1, unicodeString: &ch)
+            _ = app.testHandleKeyEvent(type: .keyDown, event: event)
+            typed.append(Character(UnicodeScalar(ch)!))
+        }
+
+        // Delay the last letter to simulate race
+        let group = DispatchGroup()
+        group.enter()
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
+            if let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) {
+                var ch: UniChar = UniChar(ukWord.unicodeScalars.last!.value)
+                event.keyboardSetUnicodeString(stringLength: 1, unicodeString: &ch)
+                _ = app.testHandleKeyEvent(type: .keyDown, event: event)
+                typed.append(Character(UnicodeScalar(ch)!))
+            }
+            group.leave()
+        }
+
+        // Process buffered word before the delayed letter arrives
+        let before = app.testWordBuffer
+        app.testProcessBufferedWordIfNeeded()
+        let convertedBefore = app.convert(before, from: "uk", to: "en")
+        typed = String(typed.dropLast(before.count)) + convertedBefore
+
+        // Wait for the delayed letter to be inserted
+        group.wait()
+
+        // Process again after the last letter is present
+        let after = app.testWordBuffer
+        app.testProcessBufferedWordIfNeeded()
+        let convertedAfter = app.convert(after, from: "uk", to: "en")
+        typed = String(typed.dropLast(after.count)) + convertedAfter
+
+        #expect(typed == expected)
     }
 }
