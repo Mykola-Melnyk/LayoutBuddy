@@ -12,7 +12,7 @@ final class AppCoordinator: NSObject {
     private let menuBar: MenuBarController
     
     // Toggle diagnostics here
-    private let enableDiagnostics = false
+    private let enableDiagnostics = true
 
     @inline(__always)
     private func dlog(_ msg: @autoclosure () -> String) {
@@ -217,6 +217,8 @@ final class AppCoordinator: NSObject {
             return Unmanaged.passUnretained(event)
         }
 
+        dlog("[KEY] decoded scalar=\(scalar) buffer=\(wordBuffer)")
+
         // If we're in the middle of typing an email address, skip processing
         if inEmail {
             if CharacterSet.whitespacesAndNewlines.contains(scalar) {
@@ -237,6 +239,7 @@ final class AppCoordinator: NSObject {
         // Letters & ABC-keys-that-map-to-UA-letters → extend current word
         let currentIsLatin = isLayoutLatin(layoutManager.currentInputSourceID())
         if isLatinLetter(scalar) || isCyrillicLetter(scalar) || (currentIsLatin && isMappedLatinPunctuation(scalar)) {
+            dlog("[KEY] letters case buffer=\(wordBuffer) scalar=\(scalar)")
             // If the script of the incoming scalar differs from the script of
             // the buffered word, process the buffered word first so that the
             // new character starts a fresh word. This avoids cases where the
@@ -245,24 +248,32 @@ final class AppCoordinator: NSObject {
             if let first = wordBuffer.unicodeScalars.first {
                 let firstIsLatin = isLatinLetter(first) || letterLikePunctScalars.contains(first)
                 let newIsLatin = isLatinLetter(scalar) || (currentIsLatin && isMappedLatinPunctuation(scalar))
+                dlog("[KEY] script decision firstLatin=\(firstIsLatin) newLatin=\(newIsLatin) buffer=\(wordBuffer)")
                 if firstIsLatin != newIsLatin {
+                    dlog("[KEY] script mismatch before process buffer=\(wordBuffer) scalar=\(scalar)")
                     processBufferedWordIfNeeded()
+                    dlog("[KEY] script mismatch after process buffer=\(wordBuffer)")
                     bumpWordsAhead()
                 }
             }
+            dlog("[KEY] after script block buffer=\(wordBuffer)")
             wordBuffer.unicodeScalars.append(scalar)
             return Unmanaged.passUnretained(event)
         }
 
         // Boundary → evaluate buffered word, keep boundary char
         if isBoundary(scalar) {
+            dlog("[KEY] boundary before process buffer=\(wordBuffer) scalar=\(scalar)")
             processBufferedWordIfNeeded(keepFollowingBoundary: true)
+            dlog("[KEY] boundary after process buffer=\(wordBuffer)")
             bumpWordsAhead()
             return Unmanaged.passUnretained(event)
         }
 
         // Other symbols → treat like boundary
+        dlog("[KEY] other symbol before process buffer=\(wordBuffer) scalar=\(scalar)")
         processBufferedWordIfNeeded(keepFollowingBoundary: true)
+        dlog("[KEY] other symbol after process buffer=\(wordBuffer)")
         bumpWordsAhead()
         return Unmanaged.passUnretained(event)
     }
@@ -294,6 +305,7 @@ final class AppCoordinator: NSObject {
 
     private func processBufferedWordIfNeeded(keepFollowingBoundary: Bool = false) {
         guard !wordBuffer.isEmpty else { return }
+        dlog("[PROC] entry buffer=\(wordBuffer)")
 
         let curID = layoutManager.currentInputSourceID()
         let curLangPrefix = isLayoutUkrainian(curID) ? "uk" : "en"
@@ -304,6 +316,7 @@ final class AppCoordinator: NSObject {
 
         guard let curSpell = bestSpellLang(for: curLangPrefix),
               let otherSpell = bestSpellLang(for: otherLangPrefix) else {
+            dlog("[PROC] reset buffer")
             wordBuffer = ""; return
         }
 
@@ -311,33 +324,39 @@ final class AppCoordinator: NSObject {
         if core.count == 1 {
             let curOK = isSpelledCorrect(core, language: curSpell)
             let converted1 = convert(core, from: curLangPrefix, to: otherLangPrefix)
+            dlog("[PROC] converted=\(converted1)")
             let otherOK = !converted1.isEmpty && isSpelledCorrect(converted1, language: otherSpell)
 
             if curOK && otherOK {
                 captureAmbiguityLater(original: core, converted: converted1, targetLangPrefix: otherLangPrefix)
+                dlog("[PROC] reset buffer")
                 wordBuffer = ""; return
             } else if !curOK && otherOK {
                 replaceLastWord(with: converted1, targetLangPrefix: otherLangPrefix,
                                 keepFollowingBoundary: keepFollowingBoundary, deleteCountOverride: core.count)
                 playSwitchSound(); menuBar.updateStatusTitleAndColor()
+                dlog("[PROC] reset buffer")
                 wordBuffer = ""; return
             } else {
+                dlog("[PROC] reset buffer")
                 wordBuffer = ""; return
             }
         }
 
         let curOK = !suspiciousEN && isSpelledCorrect(core, language: curSpell)
         let convertedCore = convert(core, from: curLangPrefix, to: otherLangPrefix)
+        dlog("[PROC] converted=\(convertedCore)")
         let otherOK = !convertedCore.isEmpty && isSpelledCorrect(convertedCore, language: otherSpell)
 
         // Tie: both valid → save candidate, no auto-change
         if curOK && otherOK {
             captureAmbiguityLater(original: core, converted: convertedCore, targetLangPrefix: otherLangPrefix)
+            dlog("[PROC] reset buffer")
             wordBuffer = ""; return
         }
 
         // Keep if current is valid
-        if curOK && !otherOK { wordBuffer = ""; return }
+        if curOK && !otherOK { dlog("[PROC] reset buffer"); wordBuffer = ""; return }
 
         var shouldReplace = otherOK
         // Fallback: ABC-typed but looks Ukrainian after mapping
@@ -351,6 +370,7 @@ final class AppCoordinator: NSObject {
             playSwitchSound(); menuBar.updateStatusTitleAndColor()
         }
 
+        dlog("[PROC] reset buffer")
         wordBuffer = ""
     }
 
@@ -369,16 +389,21 @@ final class AppCoordinator: NSObject {
         let deleteCount = deleteCountOverride ?? wordBuffer.count
 
         DispatchQueue.main.async {
+            let curID = self.layoutManager.currentInputSourceID()
+            let targetID = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
+            self.dlog("[REPLACE] start synth=\(self.isSynthesizing) curID=\(curID) targetID=\(targetID) buffer=\(self.wordBuffer)")
             self.isSynthesizing = true
             if keepFollowingBoundary { self.tapKey(.leftArrow) } // keep trailing boundary (space, etc.)
             self.sendBackspace(times: deleteCount)
 
-            let targetID = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
+            self.dlog("[REPLACE] switching to targetID=\(targetID)")
             self.ensureSwitch(to: targetID) {
+                self.dlog("[REPLACE] typing on targetID=\(targetID) synth=\(self.isSynthesizing)")
                 self.typeUnicode(newWord)
                 if keepFollowingBoundary { self.tapKey(.rightArrow) }
                 self.menuBar.updateStatusTitleAndColor()
                 self.isSynthesizing = false
+                self.dlog("[REPLACE] end synth=\(self.isSynthesizing) curID=\(self.layoutManager.currentInputSourceID()) buffer=\(self.wordBuffer)")
             }
         }
     }
@@ -717,15 +742,20 @@ final class AppCoordinator: NSObject {
     }
 
     private func fallbackTypeOverSelection(el: AXUIElement, text: String, restoreCaretTo pos: Int) {
+        dlog("[FALLBACK typeover] start synth=\(isSynthesizing) curID=\(layoutManager.currentInputSourceID()) buffer=\(wordBuffer)")
         isSynthesizing = true
         typeUnicode(text)
         _ = axSetSelectedRange(el, NSRange(location: max(0, pos), length: 0))
         isSynthesizing = false
+        dlog("[FALLBACK typeover] end synth=\(isSynthesizing) curID=\(layoutManager.currentInputSourceID()) buffer=\(wordBuffer)")
         playSwitchSound(); menuBar.updateStatusTitleAndColor()
     }
 
     private func fallbackNavigateAndReplace(_ cand: AmbiguousCandidate) {
         DispatchQueue.main.async {
+            let curID = self.layoutManager.currentInputSourceID()
+            let targetID = self.layoutID(forLanguagePrefix: cand.targetLangPrefix) ?? self.otherLayoutID()
+            self.dlog("[NAVREP] start synth=\(self.isSynthesizing) curID=\(curID) targetID=\(targetID) buffer=\(self.wordBuffer)")
             self.isSynthesizing = true
 
             // Move back to the ambiguous word start
@@ -737,14 +767,16 @@ final class AppCoordinator: NSObject {
             self.sendBackspace(times: 1)
 
             // Switch to target layout and type converted word
-            let targetID = self.layoutID(forLanguagePrefix: cand.targetLangPrefix) ?? self.otherLayoutID()
+            self.dlog("[NAVREP] switching to targetID=\(targetID)")
             self.ensureSwitch(to: targetID) {
+                self.dlog("[NAVREP] typing on targetID=\(targetID) synth=\(self.isSynthesizing)")
                 self.typeUnicode(cand.converted)
                 // Return caret to where it was
                 for _ in 0..<stepsLeft { self.optRight() }
                 self.menuBar.updateStatusTitleAndColor()
                 self.playSwitchSound()
                 self.isSynthesizing = false
+                self.dlog("[NAVREP] end synth=\(self.isSynthesizing) curID=\(self.layoutManager.currentInputSourceID()) buffer=\(self.wordBuffer)")
             }
         }
     }
