@@ -6,12 +6,12 @@
 //
 
 import Testing
-import ApplicationServices
-@testable import LayoutBuddy
 import Carbon
 import ApplicationServices
+@testable import LayoutBuddy
 import Foundation
 
+@MainActor
 struct LayoutBuddyTests {
 
     @Test func ukrainianWordConversionProducesAsciiApostrophe() throws {
