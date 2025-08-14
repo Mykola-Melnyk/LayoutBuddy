@@ -421,17 +421,19 @@ final class AppCoordinator: NSObject {
             let targetID = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
             self.dlog("[REPLACE] start synth=\(self.isSynthesizing) curID=\(curID) targetID=\(targetID) buffer=\(self.wordBuffer)")
             self.isSynthesizing = true
-            if keepFollowingBoundary { self.tapKey(.leftArrow) } // keep trailing boundary (space, etc.)
-            self.sendBackspace(times: deleteCount)
 
-            self.dlog("[REPLACE] switching to targetID=\(targetID)")
-            self.ensureSwitch(to: targetID) {
-                self.dlog("[REPLACE] typing on targetID=\(targetID) synth=\(self.isSynthesizing)")
-                self.typeUnicode(newWord)
-                if keepFollowingBoundary { self.tapKey(.rightArrow) }
-                self.menuBar.updateStatusTitleAndColor()
-                self.isSynthesizing = false
-                self.dlog("[REPLACE] end synth=\(self.isSynthesizing) curID=\(self.layoutManager.currentInputSourceID()) buffer=\(self.wordBuffer)")
+            // Delay to let the system commit the most recent keystroke
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                if keepFollowingBoundary { self.tapKey(.leftArrow) } // keep trailing boundary (space, etc.)
+                self.sendBackspace(times: deleteCount)
+
+                let targetID = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
+                self.ensureSwitch(to: targetID) {
+                    self.typeUnicode(newWord)
+                    if keepFollowingBoundary { self.tapKey(.rightArrow) }
+                    self.menuBar.updateStatusTitleAndColor()
+                    self.isSynthesizing = false
+                }
             }
         }
     }
