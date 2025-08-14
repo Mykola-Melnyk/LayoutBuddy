@@ -370,15 +370,19 @@ final class AppCoordinator: NSObject {
 
         DispatchQueue.main.async {
             self.isSynthesizing = true
-            if keepFollowingBoundary { self.tapKey(.leftArrow) } // keep trailing boundary (space, etc.)
-            self.sendBackspace(times: deleteCount)
 
-            let targetID = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
-            self.ensureSwitch(to: targetID) {
-                self.typeUnicode(newWord)
-                if keepFollowingBoundary { self.tapKey(.rightArrow) }
-                self.menuBar.updateStatusTitleAndColor()
-                self.isSynthesizing = false
+            // Delay to let the system commit the most recent keystroke
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                if keepFollowingBoundary { self.tapKey(.leftArrow) } // keep trailing boundary (space, etc.)
+                self.sendBackspace(times: deleteCount)
+
+                let targetID = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
+                self.ensureSwitch(to: targetID) {
+                    self.typeUnicode(newWord)
+                    if keepFollowingBoundary { self.tapKey(.rightArrow) }
+                    self.menuBar.updateStatusTitleAndColor()
+                    self.isSynthesizing = false
+                }
             }
         }
     }
