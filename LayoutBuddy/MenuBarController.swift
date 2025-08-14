@@ -2,15 +2,15 @@ import Cocoa
 
 /// Handles status item and menu bar interactions.
 final class MenuBarController: NSObject {
-    private let preferences: LayoutPreferences
+    private let layoutManager: KeyboardLayoutManager
     private let statusItem: NSStatusItem
 
     var onSetAsPrimary: ((String) -> Void)?
     var onSetAsSecondary: ((String) -> Void)?
     var onQuit: (() -> Void)?
 
-    init(preferences: LayoutPreferences) {
-        self.preferences = preferences
+    init(layoutManager: KeyboardLayoutManager) {
+        self.layoutManager = layoutManager
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
         setupStatusItem()
@@ -61,20 +61,20 @@ final class MenuBarController: NSObject {
         button.title = ""
         button.attributedTitle = NSAttributedString(string: "")
         // Keep a tooltip with the current layout's full name:
-        let curID = preferences.currentInputSourceID()
+        let curID = layoutManager.currentInputSourceID()
         button.toolTip = fullName(for: curID) // e.g., "U.S." or "Ukrainian - PC"
         // (Optional) If you ever want tint by layout, set:
-        // button.contentTintColor = preferences.isLanguage(id: curID, hasPrefix: "uk") ? .systemBlue : .labelColor
+        // button.contentTintColor = layoutManager.isLanguage(id: curID, hasPrefix: "uk") ? .systemBlue : .labelColor
     }
 
     private func shortName(for id: String) -> String {
-        if preferences.isLanguage(id: id, hasPrefix: "uk") { return "UKR" }
-        if preferences.isLanguage(id: id, hasPrefix: "en") { return "EN" }
-        let name = preferences.inputSourceInfo(for: id)?.name ?? "???"
+        if layoutManager.isLanguage(id: id, hasPrefix: "uk") { return "UKR" }
+        if layoutManager.isLanguage(id: id, hasPrefix: "en") { return "EN" }
+        let name = layoutManager.inputSourceInfo(for: id)?.name ?? "???"
         return String(name.prefix(3)).uppercased()
     }
 
     private func fullName(for id: String) -> String {
-        preferences.inputSourceInfo(for: id)?.name ?? id
+        layoutManager.inputSourceInfo(for: id)?.name ?? id
     }
 }

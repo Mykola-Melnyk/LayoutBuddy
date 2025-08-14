@@ -8,6 +8,7 @@ final class AppCoordinator: NSObject {
     // MARK: - State
 
     private let preferences: LayoutPreferences
+    private let layoutManager: KeyboardLayoutManager
     private let menuBar: MenuBarController
     
     // Toggle diagnostics here
@@ -55,7 +56,8 @@ final class AppCoordinator: NSObject {
 
     init(preferences: LayoutPreferences = LayoutPreferences()) {
         self.preferences = preferences
-        self.menuBar = MenuBarController(preferences: preferences)
+        self.layoutManager = KeyboardLayoutManager(preferences: preferences)
+        self.menuBar = MenuBarController(layoutManager: layoutManager)
         super.init()
 
         menuBar.onSetAsPrimary = { [weak self] id in
@@ -98,9 +100,7 @@ final class AppCoordinator: NSObject {
     // MARK: - Toggle
 
     @objc private func toggleLayout() {
-        let current = preferences.currentInputSourceID()
-        let target = (current == preferences.secondaryID) ? preferences.primaryID : preferences.secondaryID
-        switchToInputSource(id: target)
+        layoutManager.toggleLayout()
         playSwitchSound()
         menuBar.updateStatusTitleAndColor()
     }
@@ -108,23 +108,6 @@ final class AppCoordinator: NSObject {
     // MARK: - Feedback
 
     private func playSwitchSound() { NSSound.beep() }
-
-    // MARK: - Input source helpers (Carbon/TIS)
-
-    private func switchToInputSource(id: String) {
-        let query: [CFString: Any] = [
-            kTISPropertyInputSourceID: id,
-            kTISPropertyInputSourceCategory: kTISCategoryKeyboardInputSource as CFString,
-            kTISPropertyInputSourceIsSelectCapable: true
-        ]
-        if let list = TISCreateInputSourceList(query as CFDictionary, false)?
-            .takeRetainedValue() as? [TISInputSource],
-           let target = list.first {
-            TISEnableInputSource(target)
-            TISSelectInputSource(target)
-        }
-    }
-
 
     // MARK: - Event tap
 
@@ -252,7 +235,7 @@ final class AppCoordinator: NSObject {
         }
 
         // Letters & ABC-keys-that-map-to-UA-letters → extend current word
-        let currentIsLatin = isLayoutLatin(preferences.currentInputSourceID())
+        let currentIsLatin = isLayoutLatin(layoutManager.currentInputSourceID())
         if isLatinLetter(scalar) || isCyrillicLetter(scalar) || (currentIsLatin && isMappedLatinPunctuation(scalar)) {
             // If the script of the incoming scalar differs from the script of
             // the buffered word, process the buffered word first so that the
@@ -312,7 +295,7 @@ final class AppCoordinator: NSObject {
     private func processBufferedWordIfNeeded(keepFollowingBoundary: Bool = false) {
         guard !wordBuffer.isEmpty else { return }
 
-        let curID = preferences.currentInputSourceID()
+        let curID = layoutManager.currentInputSourceID()
         let curLangPrefix = isLayoutUkrainian(curID) ? "uk" : "en"
         let otherLangPrefix = (curLangPrefix == "en") ? "uk" : "en"
 
@@ -447,9 +430,9 @@ final class AppCoordinator: NSObject {
     // Ensure layout really switched before typing
     private func ensureSwitch(to targetID: String, attempts: Int = 12, done: @escaping () -> Void) {
         func attempt(_ n: Int) {
-            self.switchToInputSource(id: targetID)
+            self.layoutManager.switch(to: targetID)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                if self.preferences.currentInputSourceID() == targetID || n >= attempts { done() }
+                if self.layoutManager.currentInputSourceID() == targetID || n >= attempts { done() }
                 else { attempt(n + 1) }
             }
         }
@@ -457,7 +440,7 @@ final class AppCoordinator: NSObject {
     }
 
     private func otherLayoutID() -> String {
-        let cur = preferences.currentInputSourceID()
+        let cur = layoutManager.currentInputSourceID()
         return (cur == preferences.primaryID) ? preferences.secondaryID : preferences.primaryID
     }
 
@@ -474,17 +457,17 @@ final class AppCoordinator: NSObject {
     }
 
     private func isLayoutUkrainian(_ id: String) -> Bool {
-        if preferences.isLanguage(id: id, hasPrefix: "uk") { return true }
-        let name = preferences.inputSourceInfo(for: id)?.name.lowercased() ?? ""
+        if layoutManager.isLanguage(id: id, hasPrefix: "uk") { return true }
+        let name = layoutManager.inputSourceInfo(for: id)?.name.lowercased() ?? ""
         return name.contains("ukrainian") || name.contains("україн")
     }
 
     private func isLayoutLatin(_ id: String) -> Bool {
-        let langs = preferences.inputSourceInfo(for: id)?.languages ?? []
+        let langs = layoutManager.inputSourceInfo(for: id)?.languages ?? []
         if langs.contains(where: { $0.hasPrefix("en") }) { return true }
         if langs.contains(where: { $0.localizedCaseInsensitiveContains("latn") }) { return true }
         if langs.contains(where: { $0.hasPrefix("mul") }) { return true } // ABC often mul-Latn
-        let name = preferences.inputSourceInfo(for: id)?.name.lowercased() ?? ""
+        let name = layoutManager.inputSourceInfo(for: id)?.name.lowercased() ?? ""
         if name.contains("abc") || name.contains("u.s.") || name == "us" { return true }
         let idLower = id.lowercased()
         if idLower.contains("com.apple.keylayout.abc") || idLower.contains("com.apple.keylayout.us") { return true }
