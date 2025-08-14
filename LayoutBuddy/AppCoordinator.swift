@@ -25,7 +25,11 @@ final class AppCoordinator: NSObject {
     // Global key listener
     private var eventTap: CFMachPort?
     private var runLoopSrc: CFRunLoopSource?
-    private var isSynthesizing = false
+    private var isSynthesizing = false {
+        didSet { if !isSynthesizing { flushQueuedEvents() } }
+    }
+    private var queuedEvents: [CGEvent] = []
+    private let queuedEventsLock = NSLock()
 
     // Word tracking
     private var wordBuffer = ""
@@ -133,6 +137,27 @@ final class AppCoordinator: NSObject {
         return me.handleKeyEvent(type: type, event: event)
     }
 
+    private func enqueueQueuedEvent(_ event: CGEvent) {
+        queuedEventsLock.lock()
+        queuedEvents.append(event)
+        queuedEventsLock.unlock()
+    }
+
+    private func flushQueuedEvents() {
+        queuedEventsLock.lock()
+        let events = queuedEvents
+        queuedEvents.removeAll()
+        queuedEventsLock.unlock()
+
+        for e in events {
+            e.post(tap: .cgAnnotatedSessionEventTap)
+            if let up = e.copy() {
+                up.type = .keyUp
+                up.post(tap: .cgAnnotatedSessionEventTap)
+            }
+        }
+    }
+
     // MARK: - Word parsing helpers
 
     private let letterLikePunctScalars = Set("[];',.".unicodeScalars) // ABC keys → UA letters
@@ -176,7 +201,10 @@ final class AppCoordinator: NSObject {
     // MARK: - Key handling
 
     private func handleKeyEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
-        if isSynthesizing { return Unmanaged.passUnretained(event) }
+        if isSynthesizing {
+            if let copy = event.copy() { enqueueQueuedEvent(copy) }
+            return nil
+        }
         guard type == .keyDown else { return Unmanaged.passUnretained(event) }
 
         let flags   = event.flags
@@ -804,6 +832,15 @@ extension AppCoordinator {
     /// Wrapper to access the private `handleKeyEvent` in tests.
     func testHandleKeyEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         handleKeyEvent(type: type, event: event)
+    }
+
+    /// Allows tests to toggle synthesizing state.
+    func testSetSynthesizing(_ value: Bool) { isSynthesizing = value }
+
+    /// Returns the number of events queued while synthesizing.
+    func testQueuedEventsCount() -> Int {
+        queuedEventsLock.lock(); defer { queuedEventsLock.unlock() }
+        return queuedEvents.count
     }
 }
 #endif
