@@ -14,14 +14,14 @@ import ApplicationServices
 struct LayoutBuddyTests {
 
     @Test func ukrainianWordConversionProducesAsciiApostrophe() throws {
-        let delegate = AppDelegate()
+        let delegate = AppCoordinator()
         let result = delegate.convert("п’ять", from: "uk", to: "en")
         #expect(result == "g'znm")
         #expect(result.contains("'"))
     }
 
     @Test func testDeleteClearsBufferWithoutConversion() async throws {
-        let app = AppDelegate()
+        let app = AppCoordinator()
 
         // Simulate Delete key removing last character
         app.testWordBuffer = "word.x"
@@ -39,7 +39,7 @@ struct LayoutBuddyTests {
     }
 
     @Test func testAtSymbolSkipsLayoutSwitching() throws {
-        let app = AppDelegate()
+        let app = AppCoordinator()
         app.test_setWordBuffer("hello")
 
         guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
