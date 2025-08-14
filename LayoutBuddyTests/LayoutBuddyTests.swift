@@ -145,4 +145,23 @@ struct LayoutBuddyTests {
         _ = app.testHandleKeyEvent(type: .keyDown, event: nEvent)
         #expect(app.testWordBuffer == "n")
     }
+
+    @Test func testBufferedEventsDuringSynthesis() throws {
+        let app = AppCoordinator()
+        app.testSetSynthesizing(true)
+
+        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
+            #expect(Bool(false), "Unable to create CGEvent for testing")
+            return
+        }
+        var ch: UniChar = 97 // 'a'
+        event.keyboardSetUnicodeString(stringLength: 1, unicodeString: &ch)
+
+        let result = app.testHandleKeyEvent(type: .keyDown, event: event)
+        #expect(result == nil)
+        #expect(app.testQueuedEventsCount() == 1)
+
+        app.testSetSynthesizing(false)
+        #expect(app.testQueuedEventsCount() == 0)
+    }
 }
