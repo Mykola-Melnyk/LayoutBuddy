@@ -28,6 +28,7 @@ final class AppCoordinator: NSObject {
 
     // Word tracking
     private var wordBuffer = ""
+    private var inEmail = false
 
     // Spellchecker
     private let spellDocTag: Int = NSSpellChecker.uniqueSpellDocumentTag()
@@ -282,17 +283,27 @@ final class AppCoordinator: NSObject {
             return Unmanaged.passUnretained(event)
         }
 
+        // If we're in the middle of typing an email address, skip processing
+        if inEmail {
+            if CharacterSet.whitespacesAndNewlines.contains(scalar) {
+                inEmail = false
+                bumpWordsAhead()
+            }
+            return Unmanaged.passUnretained(event)
+        }
+
+        // Keep email addresses untouched — '@' should start email mode
+        if scalar == UnicodeScalar(64) { // '@'
+            wordBuffer = ""
+            inEmail = true
+            bumpWordsAhead()
+            return Unmanaged.passUnretained(event)
+        }
+
         // Letters & ABC-keys-that-map-to-UA-letters → extend current word
         let currentIsLatin = isLayoutLatin(preferences.currentInputSourceID())
         if isLatinLetter(scalar) || isCyrillicLetter(scalar) || (currentIsLatin && isMappedLatinPunctuation(scalar)) {
             wordBuffer.unicodeScalars.append(scalar)
-            return Unmanaged.passUnretained(event)
-        }
-
-        // Keep email addresses untouched — '@' should not trigger auto-switching
-        if scalar == UnicodeScalar(64) { // '@'
-            wordBuffer = ""
-            bumpWordsAhead()
             return Unmanaged.passUnretained(event)
         }
 
