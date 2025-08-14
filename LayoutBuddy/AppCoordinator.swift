@@ -303,6 +303,19 @@ final class AppCoordinator: NSObject {
         // Letters & ABC-keys-that-map-to-UA-letters → extend current word
         let currentIsLatin = isLayoutLatin(preferences.currentInputSourceID())
         if isLatinLetter(scalar) || isCyrillicLetter(scalar) || (currentIsLatin && isMappedLatinPunctuation(scalar)) {
+            // If the script of the incoming scalar differs from the script of
+            // the buffered word, process the buffered word first so that the
+            // new character starts a fresh word. This avoids cases where the
+            // first character of the next word becomes glued to the previous
+            // one, e.g. "helloщ" or "привітn".
+            if let first = wordBuffer.unicodeScalars.first {
+                let firstIsLatin = isLatinLetter(first) || letterLikePunctScalars.contains(first)
+                let newIsLatin = isLatinLetter(scalar) || (currentIsLatin && isMappedLatinPunctuation(scalar))
+                if firstIsLatin != newIsLatin {
+                    processBufferedWordIfNeeded()
+                    bumpWordsAhead()
+                }
+            }
             wordBuffer.unicodeScalars.append(scalar)
             return Unmanaged.passUnretained(event)
         }
