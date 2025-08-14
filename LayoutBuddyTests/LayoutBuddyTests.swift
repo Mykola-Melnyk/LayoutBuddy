@@ -169,7 +169,7 @@ struct LayoutBuddyTests {
         // Delay the last letter to simulate race
         let group = DispatchGroup()
         group.enter()
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             if let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) {
                 var ch: UniChar = UniChar(ukWord.unicodeScalars.last!.value)
                 event.keyboardSetUnicodeString(stringLength: 1, unicodeString: &ch)
