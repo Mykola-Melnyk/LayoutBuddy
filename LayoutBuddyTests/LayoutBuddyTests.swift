@@ -31,13 +31,13 @@ struct LayoutBuddyTests {
         #expect(app.convert("руддщ", from: "uk", to: "en") == "hello")
     }
 
-    @MainActor private func waitForSynthesis(_ app: AppCoordinator, timeout: TimeInterval = 1.0) {
+    @MainActor private func waitForSynthesis(_ app: AppCoordinator, timeout: TimeInterval = 1.0) async {
         let end = Date().addingTimeInterval(timeout)
         while Date() < end {
-            RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01))
             if app.testLastDeletionCount() > 0 || app.testLastInserted() != nil {
                 return
             }
+            try? await Task.sleep(nanoseconds: 10_000_000)
         }
     }
 
@@ -72,7 +72,7 @@ struct LayoutBuddyTests {
 #endif
         let result = app.testHandleKeyEvent(type: .keyDown, event: hotkey)
 
-        waitForSynthesis(app)
+        await waitForSynthesis(app)
 
 #if os(Linux)
         #expect(result?.takeUnretainedValue() === hotkey)
@@ -129,7 +129,7 @@ struct LayoutBuddyTests {
 #endif
         let result = app.testHandleKeyEvent(type: .keyDown, event: hotkey)
 
-        waitForSynthesis(app)
+        await waitForSynthesis(app)
 
 #if os(Linux)
         #expect(result?.takeUnretainedValue() === hotkey)
