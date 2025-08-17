@@ -378,8 +378,11 @@ final class AppCoordinator: NSObject {
     }
 
     private func sendBackspace(times: Int) {
-        if isRunningUnitTests { return }
         guard times > 0 else { return }
+#if DEBUG
+        testNotifyDidDeleteBackward(times)
+#endif
+        if isRunningUnitTests { return }
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
         let vk = CGKeyCode(kVK_Delete)
         for _ in 0..<times {
@@ -389,6 +392,9 @@ final class AppCoordinator: NSObject {
     }
 
     private func typeUnicode(_ text: String) {
+    #if DEBUG
+        testNotifyDidTypeText(text)
+    #endif
         if isRunningUnitTests { return }
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
         for scalar in text.unicodeScalars {
@@ -783,7 +789,47 @@ extension AppCoordinator {
         queuedEventsLock.lock(); defer { queuedEventsLock.unlock() }
         return queuedEvents.count
     }
+
+    // Starts capture buffer for synthesized edits
+    @MainActor public func testBeginCaptureBuffer() {
+        test_captureText = ""
+        test_lastDeletionCount = 0
+        test_lastInserted = nil
+        test_isCapturing = true
+    }
+
+    @MainActor public func testCapturedText() -> String { test_captureText }
+    @MainActor public func testLastDeletionCount() -> Int { test_lastDeletionCount }
+    @MainActor public func testLastInserted() -> String? { test_lastInserted }
+
+    @MainActor public func testNotifyDidDeleteBackward(_ times: Int) {
+        guard test_isCapturing, times > 0 else { return }
+        test_lastDeletionCount = times
+        if !test_captureText.isEmpty {
+            let end = test_captureText.endIndex
+            let start = test_captureText.index(end, offsetBy: -min(times, test_captureText.count))
+            test_captureText.removeSubrange(start..<end)
+        }
+    }
+
+    @MainActor public func testNotifyDidTypeText(_ text: String) {
+        guard test_isCapturing else { return }
+        test_lastInserted = text
+        test_captureText.append(text)
+    }
+
+    @MainActor public func testAppendRawKeystroke(_ scalar: UniChar) {
+        guard test_isCapturing, let uni = UnicodeScalar(scalar) else { return }
+        test_captureText.append(Character(uni))
+    }
 }
+#endif
+
+#if DEBUG
+@MainActor fileprivate var test_isCapturing = false
+@MainActor fileprivate var test_captureText: String = ""
+@MainActor fileprivate var test_lastDeletionCount: Int = 0
+@MainActor fileprivate var test_lastInserted: String? = nil
 #endif
 
 // MARK: - EventTapControllerDelegate

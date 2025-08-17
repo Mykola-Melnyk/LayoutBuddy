@@ -66,6 +66,7 @@ public class CGEvent {
 
 public let kVK_Delete: Int32 = 51
 public let kVK_ForwardDelete: Int32 = 117
+public let kVK_Space: Int32 = 49
 
 public final class AppCoordinator {
     private var wordParser = WordParser()
@@ -112,7 +113,7 @@ public final class AppCoordinator {
     }()
 
     // MARK: - Event handling
-    private func handleKeyEvent(_ event: CGEvent) -> Unmanaged<CGEvent>? {
+    @MainActor private func handleKeyEvent(_ event: CGEvent) -> Unmanaged<CGEvent>? {
         if isSynthesizing {
             if let copy = event.copy() { enqueueQueuedEvent(copy) }
             return nil
@@ -121,7 +122,24 @@ public final class AppCoordinator {
 
         let flags = event.flags
         let hasAlt = flags.contains(.maskAlternate)
+        let hasCtrl = flags.contains(.maskControl)
         let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+
+        if hasCtrl && hasAlt && keyCode == CGKeyCode(kVK_Space) {
+            let word = wordParser.buffer
+            if !word.isEmpty {
+                let converted: String
+                if let first = word.unicodeScalars.first, wordParser.isLatinLetter(first) {
+                    converted = convert(word, from: "en", to: "uk")
+                } else {
+                    converted = convert(word, from: "uk", to: "en")
+                }
+                testNotifyDidDeleteBackward(word.count)
+                testNotifyDidTypeText(converted)
+                wordParser.clear()
+            }
+            return Unmanaged.passUnretained(event)
+        }
 
         if keyCode == CGKeyCode(kVK_Delete) || keyCode == CGKeyCode(kVK_ForwardDelete) {
             if hasAlt {
@@ -190,7 +208,7 @@ public final class AppCoordinator {
         set { wordParser.test_setBuffer(newValue) }
     }
 
-    public func testHandleKeyEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+    @MainActor public func testHandleKeyEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         handleKeyEvent(event)
     }
 
@@ -202,5 +220,44 @@ public final class AppCoordinator {
         queuedEventsLock.lock(); defer { queuedEventsLock.unlock() }
         return queuedEvents.count
     }
+
+    @MainActor public func testBeginCaptureBuffer() {
+        test_captureText = ""
+        test_lastDeletionCount = 0
+        test_lastInserted = nil
+        test_isCapturing = true
+    }
+
+    @MainActor public func testCapturedText() -> String { test_captureText }
+    @MainActor public func testLastDeletionCount() -> Int { test_lastDeletionCount }
+    @MainActor public func testLastInserted() -> String? { test_lastInserted }
+
+    @MainActor public func testNotifyDidDeleteBackward(_ times: Int) {
+        guard test_isCapturing, times > 0 else { return }
+        test_lastDeletionCount = times
+        if !test_captureText.isEmpty {
+            let end = test_captureText.endIndex
+            let start = test_captureText.index(end, offsetBy: -min(times, test_captureText.count))
+            test_captureText.removeSubrange(start..<end)
+        }
+    }
+
+    @MainActor public func testNotifyDidTypeText(_ text: String) {
+        guard test_isCapturing else { return }
+        test_lastInserted = text
+        test_captureText.append(text)
+    }
+
+    @MainActor public func testAppendRawKeystroke(_ scalar: UniChar) {
+        guard test_isCapturing, let uni = UnicodeScalar(scalar) else { return }
+        test_captureText.append(Character(uni))
+    }
 }
+#endif
+
+#if DEBUG
+@MainActor fileprivate var test_isCapturing = false
+@MainActor fileprivate var test_captureText: String = ""
+@MainActor fileprivate var test_lastDeletionCount: Int = 0
+@MainActor fileprivate var test_lastInserted: String? = nil
 #endif

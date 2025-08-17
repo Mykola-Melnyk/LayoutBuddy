@@ -18,6 +18,7 @@ import Carbon
 
 import Foundation
 
+@MainActor
 struct LayoutBuddyTests {
 
     @Test func testEnglishInputProducesUkrainianOutput() throws {
@@ -30,68 +31,108 @@ struct LayoutBuddyTests {
         #expect(app.convert("руддщ", from: "uk", to: "en") == "hello")
     }
 
-    @Test func testAmbiguousEnglishWordHotkeyConversion() throws {
+    @Test func testAmbiguousEnglishWordHotkeyConversion_blackBox() throws {
         let app = AppCoordinator()
+        app.testBeginCaptureBuffer()
 
-        // Simulate typing "the" while on the English layout
         for scalar in "the".unicodeScalars {
-            guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
-                #expect(Bool(false), "Unable to create CGEvent for testing")
+            guard let e = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
+                #expect(Bool(false), "Unable to create CGEvent")
                 return
             }
-            var ch: UniChar = UniChar(scalar.value)
-            event.keyboardSetUnicodeString(stringLength: 1, unicodeString: &ch)
-            _ = app.testHandleKeyEvent(type: .keyDown, event: event)
+            var ch = UniChar(scalar.value)
+            e.keyboardSetUnicodeString(stringLength: 1, unicodeString: &ch)
+            _ = app.testHandleKeyEvent(type: .keyDown, event: e)
+            app.testAppendRawKeystroke(ch)
         }
 
-        // Press Control+Option+Space to trigger hotkey conversion
         guard let hotkey = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(49), keyDown: true) else {
-            #expect(Bool(false), "Unable to create hotkey CGEvent for testing")
+            #expect(Bool(false), "Unable to create hotkey event")
             return
         }
         hotkey.flags = [.maskControl, .maskAlternate]
-        let hotkeyResult = app.testHandleKeyEvent(type: .keyDown, event: hotkey)
 #if os(Linux)
-        #expect(hotkeyResult?.takeUnretainedValue() === hotkey)
+        var dummy: UniChar = 0
+        hotkey.keyboardSetUnicodeString(stringLength: 0, unicodeString: &dummy)
 #else
-        #expect(hotkeyResult == nil)
+        hotkey.keyboardSetUnicodeString(stringLength: 0, unicodeString: nil)
+#endif
+        let result = app.testHandleKeyEvent(type: .keyDown, event: hotkey)
+
+#if os(Linux)
+        #expect(result?.takeUnretainedValue() === hotkey)
+#else
+        #expect(result == nil)
 #endif
 
-        // Ensure the expected conversion mapping
-        #expect(app.convert("the", from: "en", to: "uk") == "еру")
-        #expect(app.convert("best cat", from: "en", to: "en") == "best cat")
+        #expect(app.testLastDeletionCount() == 3)
+        #expect(app.testLastInserted() == "еру")
+        #expect(app.testCapturedText() == "еру")
+
+        for scalar in " best cat".unicodeScalars {
+            guard let e = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
+                #expect(Bool(false), "Unable to create CGEvent")
+                return
+            }
+            var ch = UniChar(scalar.value)
+            e.keyboardSetUnicodeString(stringLength: 1, unicodeString: &ch)
+            _ = app.testHandleKeyEvent(type: .keyDown, event: e)
+            app.testAppendRawKeystroke(ch)
+        }
+
+        #expect(app.testCapturedText() == "еру best cat")
     }
 
-    @Test func testAmbiguousUkrainianWordHotkeyConversion() throws {
+    @Test func testAmbiguousUkrainianWordHotkeyConversion_blackBox() throws {
         let app = AppCoordinator()
+        app.testBeginCaptureBuffer()
 
-        // Simulate typing "еру" while on the Ukrainian layout
         for scalar in "еру".unicodeScalars {
-            guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
-                #expect(Bool(false), "Unable to create CGEvent for testing")
+            guard let e = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
+                #expect(Bool(false), "Unable to create CGEvent")
                 return
             }
-            var ch: UniChar = UniChar(scalar.value)
-            event.keyboardSetUnicodeString(stringLength: 1, unicodeString: &ch)
-            _ = app.testHandleKeyEvent(type: .keyDown, event: event)
+            var ch = UniChar(scalar.value)
+            e.keyboardSetUnicodeString(stringLength: 1, unicodeString: &ch)
+            _ = app.testHandleKeyEvent(type: .keyDown, event: e)
+            app.testAppendRawKeystroke(ch)
         }
 
-        // Hotkey to convert the ambiguous word
         guard let hotkey = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(49), keyDown: true) else {
-            #expect(Bool(false), "Unable to create hotkey CGEvent for testing")
+            #expect(Bool(false), "Unable to create hotkey event")
             return
         }
         hotkey.flags = [.maskControl, .maskAlternate]
-        let hotkeyResult = app.testHandleKeyEvent(type: .keyDown, event: hotkey)
 #if os(Linux)
-        #expect(hotkeyResult?.takeUnretainedValue() === hotkey)
+        var dummy: UniChar = 0
+        hotkey.keyboardSetUnicodeString(stringLength: 0, unicodeString: &dummy)
 #else
-        #expect(hotkeyResult == nil)
+        hotkey.keyboardSetUnicodeString(stringLength: 0, unicodeString: nil)
+#endif
+        let result = app.testHandleKeyEvent(type: .keyDown, event: hotkey)
+
+#if os(Linux)
+        #expect(result?.takeUnretainedValue() === hotkey)
+#else
+        #expect(result == nil)
 #endif
 
-        // Ensure the expected conversion mapping
-        #expect(app.convert("еру", from: "uk", to: "en") == "the")
-        #expect(app.convert("нового розвитку", from: "uk", to: "uk") == "нового розвитку")
+        #expect(app.testLastDeletionCount() == 3)
+        #expect(app.testLastInserted() == "the")
+        #expect(app.testCapturedText() == "the")
+
+        for scalar in " нового розвитку".unicodeScalars {
+            guard let e = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
+                #expect(Bool(false), "Unable to create CGEvent")
+                return
+            }
+            var ch = UniChar(scalar.value)
+            e.keyboardSetUnicodeString(stringLength: 1, unicodeString: &ch)
+            _ = app.testHandleKeyEvent(type: .keyDown, event: e)
+            app.testAppendRawKeystroke(ch)
+        }
+
+        #expect(app.testCapturedText() == "the нового розвитку")
     }
 
     @Test func testMappedPunctuationConversion() throws {
