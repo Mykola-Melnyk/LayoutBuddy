@@ -35,7 +35,7 @@ final class SpellCheckerService {
                 startingAt: 0,
                 language: language,
                 wrap: false,
-                inSpellDocumentWithTag: spellDocTag,
+                inSpellDocumentWithTag: self.spellDocTag,
                 wordCount: nil
             )
             return miss.location == NSNotFound
