@@ -20,6 +20,33 @@ import Foundation
 
 struct LayoutBuddyTests {
 
+    @Test func testEnglishInputProducesUkrainianOutput() throws {
+        let app = AppCoordinator()
+        #expect(app.convert("ghbdsn", from: "en", to: "uk") == "привіт")
+    }
+
+    @Test func testUkrainianInputProducesEnglishOutput() throws {
+        let app = AppCoordinator()
+        #expect(app.convert("руддщ", from: "uk", to: "en") == "hello")
+    }
+
+    @Test func testAmbiguousEnglishWordHotkeyConversion() throws {
+        let app = AppCoordinator()
+        #expect(app.convert("the", from: "en", to: "uk") == "еру")
+        #expect(app.convert("best cat", from: "en", to: "en") == "best cat")
+    }
+
+    @Test func testAmbiguousUkrainianWordHotkeyConversion() throws {
+        let app = AppCoordinator()
+        #expect(app.convert("еру", from: "uk", to: "en") == "the")
+        #expect(app.convert("нового розвитку", from: "uk", to: "uk") == "нового розвитку")
+    }
+
+    @Test func testMappedPunctuationConversion() throws {
+        let app = AppCoordinator()
+        #expect(app.convert(",elm", from: "en", to: "uk") == "будь")
+    }
+
     @Test func testDeleteClearsBufferWithoutConversion() async throws {
         let app = AppCoordinator()
 
