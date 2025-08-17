@@ -377,7 +377,7 @@ final class AppCoordinator: NSObject {
         }
     }
 
-    private func sendBackspace(times: Int) {
+    @MainActor private func sendBackspace(times: Int) {
         guard times > 0 else { return }
 #if DEBUG
         testNotifyDidDeleteBackward(times)
@@ -391,7 +391,7 @@ final class AppCoordinator: NSObject {
         }
     }
 
-    private func typeUnicode(_ text: String) {
+    @MainActor private func typeUnicode(_ text: String) {
     #if DEBUG
         testNotifyDidTypeText(text)
     #endif
