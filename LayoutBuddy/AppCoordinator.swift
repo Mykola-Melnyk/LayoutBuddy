@@ -39,6 +39,14 @@ final class AppCoordinator: NSObject {
     // Spellchecker
     private let spellDocTag: Int = NSSpellChecker.uniqueSpellDocumentTag()
 
+#if DEBUG
+    // Test capture buffer
+    private var test_isCapturing = false
+    private var test_captureText: String = ""
+    private var test_lastDeletionCount: Int = 0
+    private var test_lastInserted: String? = nil
+#endif
+
     // Ambiguity “fix later” stack
     private struct AmbiguousCandidate {
         let element: AXUIElement?          // nil when AX was unavailable
@@ -819,13 +827,6 @@ extension AppCoordinator {
         test_captureText.append(Character(uni))
     }
 }
-#endif
-
-#if DEBUG
-@MainActor fileprivate var test_isCapturing = false
-@MainActor fileprivate var test_captureText: String = ""
-@MainActor fileprivate var test_lastDeletionCount: Int = 0
-@MainActor fileprivate var test_lastInserted: String? = nil
 #endif
 
 // MARK: - EventTapControllerDelegate

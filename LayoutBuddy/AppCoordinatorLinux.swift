@@ -79,6 +79,14 @@ public final class AppCoordinator {
 
     public init() {}
 
+#if DEBUG
+    // Test capture buffer
+    private var test_isCapturing = false
+    private var test_captureText: String = ""
+    private var test_lastDeletionCount: Int = 0
+    private var test_lastInserted: String? = nil
+#endif
+
     // MARK: - Conversion
     public func convert(_ word: String, from src: String, to dst: String) -> String {
         if src == "en", dst == "uk" { return mapWord(word, using: en2uk) }
@@ -253,11 +261,4 @@ public final class AppCoordinator {
         test_captureText.append(Character(uni))
     }
 }
-#endif
-
-#if DEBUG
-@MainActor fileprivate var test_isCapturing = false
-@MainActor fileprivate var test_captureText: String = ""
-@MainActor fileprivate var test_lastDeletionCount: Int = 0
-@MainActor fileprivate var test_lastInserted: String? = nil
 #endif

@@ -31,7 +31,7 @@ struct LayoutBuddyTests {
         #expect(app.convert("руддщ", from: "uk", to: "en") == "hello")
     }
 
-    @Test func testAmbiguousEnglishWordHotkeyConversion_blackBox() throws {
+    @Test func testAmbiguousEnglishWordHotkeyConversion_blackBox() async throws {
         let app = AppCoordinator()
         app.testBeginCaptureBuffer()
 
@@ -46,6 +46,9 @@ struct LayoutBuddyTests {
             app.testAppendRawKeystroke(ch)
         }
 
+        // Allow time for ambiguity capture
+        try await Task.sleep(nanoseconds: 300_000_000)
+
         guard let hotkey = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(49), keyDown: true) else {
             #expect(Bool(false), "Unable to create hotkey event")
             return
@@ -58,6 +61,9 @@ struct LayoutBuddyTests {
         hotkey.keyboardSetUnicodeString(stringLength: 0, unicodeString: nil)
 #endif
         let result = app.testHandleKeyEvent(type: .keyDown, event: hotkey)
+
+        // Allow async hotkey processing to finish
+        try await Task.sleep(nanoseconds: 50_000_000)
 
 #if os(Linux)
         #expect(result?.takeUnretainedValue() === hotkey)
@@ -83,7 +89,7 @@ struct LayoutBuddyTests {
         #expect(app.testCapturedText() == "еру best cat")
     }
 
-    @Test func testAmbiguousUkrainianWordHotkeyConversion_blackBox() throws {
+    @Test func testAmbiguousUkrainianWordHotkeyConversion_blackBox() async throws {
         let app = AppCoordinator()
         app.testBeginCaptureBuffer()
 
@@ -98,6 +104,9 @@ struct LayoutBuddyTests {
             app.testAppendRawKeystroke(ch)
         }
 
+        // Allow time for ambiguity capture
+        try await Task.sleep(nanoseconds: 300_000_000)
+
         guard let hotkey = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(49), keyDown: true) else {
             #expect(Bool(false), "Unable to create hotkey event")
             return
@@ -110,6 +119,9 @@ struct LayoutBuddyTests {
         hotkey.keyboardSetUnicodeString(stringLength: 0, unicodeString: nil)
 #endif
         let result = app.testHandleKeyEvent(type: .keyDown, event: hotkey)
+
+        // Allow async hotkey processing to finish
+        try await Task.sleep(nanoseconds: 50_000_000)
 
 #if os(Linux)
         #expect(result?.takeUnretainedValue() === hotkey)
