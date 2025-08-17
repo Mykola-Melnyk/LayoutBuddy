@@ -33,7 +33,7 @@ final class AppCoordinator: NSObject {
     private let isRunningUnitTests: Bool = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
     // Word tracking
-    private var wordBuffer = ""
+    private var wordParser = WordParser()
     private var inEmail = false
 
     // Spellchecker
@@ -137,46 +137,6 @@ final class AppCoordinator: NSObject {
         }
     }
 
-    // MARK: - Word parsing helpers
-
-    private let letterLikePunctScalars = Set("[];',.".unicodeScalars) // ABC keys → UA letters
-    private func isMappedLatinPunctuation(_ s: UnicodeScalar) -> Bool {
-        letterLikePunctScalars.contains(s)
-    }
-
-    private let trailingMappedScalars = Set(".,;".unicodeScalars)
-    private func splitTrailingMapped(_ s: String) -> (core: String, trailingCount: Int) {
-        var scalars = Array(s.unicodeScalars)
-        while let last = scalars.last, trailingMappedScalars.contains(last) { scalars.removeLast() }
-        let core = String(String.UnicodeScalarView(scalars))
-        return (core, s.count - core.count)
-    }
-
-    private let suspicionMappedScalars = Set("[];,. ".unicodeScalars).subtracting(Set("'".unicodeScalars))
-    private func containsSuspiciousMapped(_ s: String) -> Bool {
-        s.unicodeScalars.contains { suspicionMappedScalars.contains($0) }
-    }
-
-    private let wordInternalScalars = Set("'’-".unicodeScalars) // keep inside words
-    private func isWordInternal(_ s: UnicodeScalar) -> Bool { wordInternalScalars.contains(s) }
-
-    private func isBoundary(_ s: UnicodeScalar) -> Bool {
-        if isWordInternal(s) { return false }
-        if CharacterSet.whitespacesAndNewlines.contains(s) { return true }
-        let punct = ".,;:!?()[]{}<>/\\\"“”‘’—–_|@#€$%^&*+=`~"
-        return punct.unicodeScalars.contains(s)
-    }
-
-    private func isLatinLetter(_ s: UnicodeScalar) -> Bool {
-        ((0x41...0x5A).contains(s.value)) || ((0x61...0x7A).contains(s.value))
-    }
-    private func isCyrillicLetter(_ s: UnicodeScalar) -> Bool {
-        (0x0400...0x04FF).contains(s.value) ||
-        (0x0500...0x052F).contains(s.value) ||
-        (0x2DE0...0x2DFF).contains(s.value) ||
-        (0xA640...0xA69F).contains(s.value)
-    }
-
     // MARK: - Key handling
 
     private func handleKeyEvent(_ event: CGEvent) -> Unmanaged<CGEvent>? {
@@ -209,9 +169,9 @@ final class AppCoordinator: NSObject {
         // Backspace/delete edits the current word buffer without triggering processing
         if keyCode == CGKeyCode(kVK_Delete) || keyCode == CGKeyCode(kVK_ForwardDelete) {
             if hasAlt {
-                wordBuffer = ""
-            } else if !wordBuffer.isEmpty {
-                wordBuffer.unicodeScalars.removeLast()
+                wordParser.clear()
+            } else if !wordParser.buffer.isEmpty {
+                wordParser.removeLast()
             }
             return Unmanaged.passUnretained(event)
         }
@@ -224,7 +184,7 @@ final class AppCoordinator: NSObject {
             return Unmanaged.passUnretained(event)
         }
 
-        dlog("[KEY] decoded scalar=\(scalar) buffer=\(wordBuffer)")
+        dlog("[KEY] decoded scalar=\(scalar) buffer=\(wordParser.buffer)")
 
         // If we're in the middle of typing an email address, skip processing
         if inEmail {
@@ -237,7 +197,7 @@ final class AppCoordinator: NSObject {
 
         // Keep email addresses untouched — '@' should start email mode
         if scalar == UnicodeScalar(64) { // '@'
-            wordBuffer = ""
+            wordParser.clear()
             inEmail = true
             bumpWordsAhead()
             return Unmanaged.passUnretained(event)
@@ -245,42 +205,42 @@ final class AppCoordinator: NSObject {
 
         // Letters & ABC-keys-that-map-to-UA-letters → extend current word
         let currentIsLatin = isLayoutLatin(layoutManager.currentInputSourceID())
-        if isLatinLetter(scalar) || isCyrillicLetter(scalar) || (currentIsLatin && isMappedLatinPunctuation(scalar)) {
-            dlog("[KEY] letters case buffer=\(wordBuffer) scalar=\(scalar)")
+        if wordParser.isLatinLetter(scalar) || wordParser.isCyrillicLetter(scalar) || (currentIsLatin && wordParser.isMappedLatinPunctuation(scalar)) {
+            dlog("[KEY] letters case buffer=\(wordParser.buffer) scalar=\(scalar)")
             // If the script of the incoming scalar differs from the script of
             // the buffered word, process the buffered word first so that the
             // new character starts a fresh word. This avoids cases where the
             // first character of the next word becomes glued to the previous
             // one, e.g. "helloщ" or "привітn".
-            if let first = wordBuffer.unicodeScalars.first {
-                let firstIsLatin = isLatinLetter(first) || letterLikePunctScalars.contains(first)
-                let newIsLatin = isLatinLetter(scalar) || (currentIsLatin && isMappedLatinPunctuation(scalar))
-                dlog("[KEY] script decision firstLatin=\(firstIsLatin) newLatin=\(newIsLatin) buffer=\(wordBuffer)")
+            if let first = wordParser.buffer.unicodeScalars.first {
+                let firstIsLatin = wordParser.isLatinLetter(first) || wordParser.isMappedLatinPunctuation(first)
+                let newIsLatin = wordParser.isLatinLetter(scalar) || (currentIsLatin && wordParser.isMappedLatinPunctuation(scalar))
+                dlog("[KEY] script decision firstLatin=\(firstIsLatin) newLatin=\(newIsLatin) buffer=\(wordParser.buffer)")
                 if firstIsLatin != newIsLatin {
-                    dlog("[KEY] script mismatch before process buffer=\(wordBuffer) scalar=\(scalar)")
+                    dlog("[KEY] script mismatch before process buffer=\(wordParser.buffer) scalar=\(scalar)")
                     processBufferedWordIfNeeded()
-                    dlog("[KEY] script mismatch after process buffer=\(wordBuffer)")
+                    dlog("[KEY] script mismatch after process buffer=\(wordParser.buffer)")
                     bumpWordsAhead()
                 }
             }
-            dlog("[KEY] after script block buffer=\(wordBuffer)")
-            wordBuffer.unicodeScalars.append(scalar)
+            dlog("[KEY] after script block buffer=\(wordParser.buffer)")
+            wordParser.append(character: scalar)
             return Unmanaged.passUnretained(event)
         }
 
         // Boundary → evaluate buffered word, keep boundary char
-        if isBoundary(scalar) {
-            dlog("[KEY] boundary before process buffer=\(wordBuffer) scalar=\(scalar)")
+        if wordParser.isBoundary(scalar) {
+            dlog("[KEY] boundary before process buffer=\(wordParser.buffer) scalar=\(scalar)")
             processBufferedWordIfNeeded(keepFollowingBoundary: true)
-            dlog("[KEY] boundary after process buffer=\(wordBuffer)")
+            dlog("[KEY] boundary after process buffer=\(wordParser.buffer)")
             bumpWordsAhead()
             return Unmanaged.passUnretained(event)
         }
 
         // Other symbols → treat like boundary
-        dlog("[KEY] other symbol before process buffer=\(wordBuffer) scalar=\(scalar)")
+        dlog("[KEY] other symbol before process buffer=\(wordParser.buffer) scalar=\(scalar)")
         processBufferedWordIfNeeded(keepFollowingBoundary: true)
-        dlog("[KEY] other symbol after process buffer=\(wordBuffer)")
+        dlog("[KEY] other symbol after process buffer=\(wordParser.buffer)")
         bumpWordsAhead()
         return Unmanaged.passUnretained(event)
     }
@@ -311,20 +271,20 @@ final class AppCoordinator: NSObject {
     // MARK: - Process a completed word
 
     private func processBufferedWordIfNeeded(keepFollowingBoundary: Bool = false) {
-        guard !wordBuffer.isEmpty else { return }
-        dlog("[PROC] entry buffer=\(wordBuffer)")
+        guard !wordParser.buffer.isEmpty else { return }
+        dlog("[PROC] entry buffer=\(wordParser.buffer)")
 
         let curID = layoutManager.currentInputSourceID()
         let curLangPrefix = isLayoutUkrainian(curID) ? "uk" : "en"
         let otherLangPrefix = (curLangPrefix == "en") ? "uk" : "en"
 
-        let (core, _) = splitTrailingMapped(wordBuffer)
-        let suspiciousEN = (curLangPrefix == "en") && containsSuspiciousMapped(core)
+        let (core, _) = wordParser.splitTrailingMapped(wordParser.buffer)
+        let suspiciousEN = (curLangPrefix == "en") && wordParser.containsSuspiciousMapped(core)
 
         guard let curSpell = bestSpellLang(for: curLangPrefix),
               let otherSpell = bestSpellLang(for: otherLangPrefix) else {
             dlog("[PROC] reset buffer")
-            wordBuffer = ""; return
+            wordParser.clear(); return
         }
 
         // Single-letter policy
@@ -337,16 +297,16 @@ final class AppCoordinator: NSObject {
             if curOK && otherOK {
                 captureAmbiguityLater(original: core, converted: converted1, targetLangPrefix: otherLangPrefix)
                 dlog("[PROC] reset buffer")
-                wordBuffer = ""; return
+                wordParser.clear(); return
             } else if !curOK && otherOK {
                 replaceLastWord(with: converted1, targetLangPrefix: otherLangPrefix,
                                 keepFollowingBoundary: keepFollowingBoundary, deleteCountOverride: core.count)
                 playSwitchSound(); menuBar.updateStatusTitleAndColor()
                 dlog("[PROC] reset buffer")
-                wordBuffer = ""; return
+                wordParser.clear(); return
             } else {
                 dlog("[PROC] reset buffer")
-                wordBuffer = ""; return
+                wordParser.clear(); return
             }
         }
 
@@ -359,15 +319,15 @@ final class AppCoordinator: NSObject {
         if curOK && otherOK {
             captureAmbiguityLater(original: core, converted: convertedCore, targetLangPrefix: otherLangPrefix)
             dlog("[PROC] reset buffer")
-            wordBuffer = ""; return
+            wordParser.clear(); return
         }
 
         // Keep if current is valid
-        if curOK && !otherOK { dlog("[PROC] reset buffer"); wordBuffer = ""; return }
+        if curOK && !otherOK { dlog("[PROC] reset buffer"); wordParser.clear(); return }
 
         var shouldReplace = otherOK
         // Fallback: ABC-typed but looks Ukrainian after mapping
-        if !shouldReplace, curLangPrefix == "en", containsSuspiciousMapped(core), isAllCyrillic(convertedCore) {
+        if !shouldReplace, curLangPrefix == "en", wordParser.containsSuspiciousMapped(core), isAllCyrillic(convertedCore) {
             shouldReplace = true
         }
 
@@ -378,11 +338,11 @@ final class AppCoordinator: NSObject {
         }
 
         dlog("[PROC] reset buffer")
-        wordBuffer = ""
+        wordParser.clear()
     }
 
     private func isAllCyrillic(_ s: String) -> Bool {
-        s.unicodeScalars.allSatisfy { isCyrillicLetter($0) }
+        s.unicodeScalars.allSatisfy { wordParser.isCyrillicLetter($0) }
     }
 
     // MARK: - Immediate auto-fix (simulate keys)
@@ -393,12 +353,12 @@ final class AppCoordinator: NSObject {
                                  targetLangPrefix: String,
                                  keepFollowingBoundary: Bool,
                                  deleteCountOverride: Int? = nil) {
-        let deleteCount = deleteCountOverride ?? wordBuffer.count
+        let deleteCount = deleteCountOverride ?? wordParser.buffer.count
 
         DispatchQueue.main.async {
             let curID = self.layoutManager.currentInputSourceID()
             let targetID = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
-            self.dlog("[REPLACE] start synth=\(self.isSynthesizing) curID=\(curID) targetID=\(targetID) buffer=\(self.wordBuffer)")
+            self.dlog("[REPLACE] start synth=\(self.isSynthesizing) curID=\(curID) targetID=\(targetID) buffer=\(self.wordParser.buffer)")
             self.isSynthesizing = true
 
             // Delay to let the system commit the most recent keystroke
@@ -755,12 +715,12 @@ final class AppCoordinator: NSObject {
     }
 
     private func fallbackTypeOverSelection(el: AXUIElement, text: String, restoreCaretTo pos: Int) {
-        dlog("[FALLBACK typeover] start synth=\(isSynthesizing) curID=\(layoutManager.currentInputSourceID()) buffer=\(wordBuffer)")
+        dlog("[FALLBACK typeover] start synth=\(isSynthesizing) curID=\(layoutManager.currentInputSourceID()) buffer=\(wordParser.buffer)")
         isSynthesizing = true
         typeUnicode(text)
         _ = axSetSelectedRange(el, NSRange(location: max(0, pos), length: 0))
         isSynthesizing = false
-        dlog("[FALLBACK typeover] end synth=\(isSynthesizing) curID=\(layoutManager.currentInputSourceID()) buffer=\(wordBuffer)")
+        dlog("[FALLBACK typeover] end synth=\(isSynthesizing) curID=\(layoutManager.currentInputSourceID()) buffer=\(wordParser.buffer)")
         playSwitchSound(); menuBar.updateStatusTitleAndColor()
     }
 
@@ -768,7 +728,7 @@ final class AppCoordinator: NSObject {
         DispatchQueue.main.async {
             let curID = self.layoutManager.currentInputSourceID()
             let targetID = self.layoutID(forLanguagePrefix: cand.targetLangPrefix) ?? self.otherLayoutID()
-            self.dlog("[NAVREP] start synth=\(self.isSynthesizing) curID=\(curID) targetID=\(targetID) buffer=\(self.wordBuffer)")
+            self.dlog("[NAVREP] start synth=\(self.isSynthesizing) curID=\(curID) targetID=\(targetID) buffer=\(self.wordParser.buffer)")
             self.isSynthesizing = true
 
             // Move back to the ambiguous word start
@@ -789,29 +749,25 @@ final class AppCoordinator: NSObject {
                 self.menuBar.updateStatusTitleAndColor()
                 self.playSwitchSound()
                 self.isSynthesizing = false
-                self.dlog("[NAVREP] end synth=\(self.isSynthesizing) curID=\(self.layoutManager.currentInputSourceID()) buffer=\(self.wordBuffer)")
+                self.dlog("[NAVREP] end synth=\(self.isSynthesizing) curID=\(self.layoutManager.currentInputSourceID()) buffer=\(self.wordParser.buffer)")
             }
         }
     }
 #if DEBUG
     // MARK: - Testing helpers
     /// Expose the internal word buffer for unit tests.
-    func test_setWordBuffer(_ text: String) { wordBuffer = text }
-    func test_getWordBuffer() -> String { wordBuffer }
+    func test_setWordBuffer(_ text: String) { wordParser.test_setBuffer(text) }
+    func test_getWordBuffer() -> String { wordParser.test_getBuffer() }
 
-    /// Forward key events into the private handler for unit tests.
-    func test_handleKeyEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
-        handleKeyEvent(event)
-    }
 #endif
 }
 
 #if DEBUG
 extension AppCoordinator {
-    /// Exposes the private `wordBuffer` for testing.
+    /// Exposes the internal word buffer for testing.
     var testWordBuffer: String {
-        get { wordBuffer }
-        set { wordBuffer = newValue }
+        get { wordParser.test_getBuffer() }
+        set { wordParser.test_setBuffer(newValue) }
     }
 
     /// Wrapper to access the private `handleKeyEvent` in tests.
