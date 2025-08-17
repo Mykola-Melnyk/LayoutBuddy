@@ -6,10 +6,7 @@
 //
 
 import Testing
-import ApplicationServices
 @testable import LayoutBuddy
-import Carbon
-import ApplicationServices
 
 struct LayoutBuddyTests {
 
@@ -40,7 +37,7 @@ struct LayoutBuddyTests {
 
     @Test func testAtSymbolSkipsLayoutSwitching() throws {
         let app = AppCoordinator()
-        app.test_setWordBuffer("hello")
+        app.testWordBuffer = "hello"
 
         guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
             #expect(Bool(false), "Unable to create CGEvent for testing")
@@ -54,7 +51,7 @@ struct LayoutBuddyTests {
         #expect(returned === event)
 
         // Word buffer should be cleared to avoid layout switching inside email-like strings
-        #expect(app.test_getWordBuffer().isEmpty)
+        #expect(app.testWordBuffer.isEmpty)
 
         var ch: UniChar = 0
         var len: Int = 0
