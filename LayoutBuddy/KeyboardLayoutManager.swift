@@ -9,6 +9,12 @@ final class KeyboardLayoutManager {
         self.preferences = preferences
     }
 
+    /// Executes work on the main queue if invoked from a background thread.
+    private func performOnMain<T>(_ work: () -> T) -> T {
+        if Thread.isMainThread { return work() }
+        return DispatchQueue.main.sync(execute: work)
+    }
+
     // MARK: - Input Source Info
     struct InputSourceInfo {
         let id: String
@@ -17,21 +23,23 @@ final class KeyboardLayoutManager {
     }
 
     func listSelectableKeyboardLayouts() -> [InputSourceInfo] {
-        let query: [CFString: Any] = [
-            kTISPropertyInputSourceCategory: kTISCategoryKeyboardInputSource as CFString,
-            kTISPropertyInputSourceIsSelectCapable: true
-        ]
-        guard let list = TISCreateInputSourceList(query as CFDictionary, false)?
-            .takeRetainedValue() as? [TISInputSource] else { return [] }
+        performOnMain {
+            let query: [CFString: Any] = [
+                kTISPropertyInputSourceCategory: kTISCategoryKeyboardInputSource as CFString,
+                kTISPropertyInputSourceIsSelectCapable: true
+            ]
+            guard let list = TISCreateInputSourceList(query as CFDictionary, false)?
+                .takeRetainedValue() as? [TISInputSource] else { return [] }
 
-        let infos = list.compactMap { src -> InputSourceInfo? in
-            let id = (tisProperty(src, kTISPropertyInputSourceID) as? String) ?? ""
-            guard !id.isEmpty else { return nil }
-            let name = (tisProperty(src, kTISPropertyLocalizedName) as? String) ?? id
-            let langs = (tisProperty(src, kTISPropertyInputSourceLanguages) as? [String]) ?? []
-            return InputSourceInfo(id: id, name: name, languages: langs)
+            let infos = list.compactMap { src -> InputSourceInfo? in
+                let id = (tisProperty(src, kTISPropertyInputSourceID) as? String) ?? ""
+                guard !id.isEmpty else { return nil }
+                let name = (tisProperty(src, kTISPropertyLocalizedName) as? String) ?? id
+                let langs = (tisProperty(src, kTISPropertyInputSourceLanguages) as? [String]) ?? []
+                return InputSourceInfo(id: id, name: name, languages: langs)
+            }
+            return infos.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         }
-        return infos.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     func inputSourceInfo(for id: String) -> InputSourceInfo? {
@@ -43,20 +51,24 @@ final class KeyboardLayoutManager {
     }
 
     func currentInputSourceID() -> String {
-        guard let cur = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else { return "" }
-        return (tisProperty(cur, kTISPropertyInputSourceID) as? String) ?? ""
+        performOnMain {
+            guard let cur = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else { return "" }
+            return (tisProperty(cur, kTISPropertyInputSourceID) as? String) ?? ""
+        }
     }
 
     // MARK: - Switching
     func toggleLayout() {
-        let current = currentInputSourceID()
-        let target = (current == preferences.secondaryID) ? preferences.primaryID : preferences.secondaryID
-        switchLayout(to: target)
+        performOnMain {
+            let current = currentInputSourceID()
+            let target = (current == preferences.secondaryID) ? preferences.primaryID : preferences.secondaryID
+            switchLayout(to: target)
+        }
     }
 
     /// Switches the current keyboard layout to the specified input source ID.
     func switchLayout(to id: String) {
-        switchToInputSource(id: id)
+        performOnMain { switchToInputSource(id: id) }
     }
 
     private func switchToInputSource(id: String) {
