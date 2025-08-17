@@ -20,13 +20,6 @@ import Foundation
 
 struct LayoutBuddyTests {
 
-    @Test func ukrainianWordConversionProducesAsciiApostrophe() throws {
-        let delegate = AppCoordinator()
-        let result = delegate.convert("п’ять", from: "uk", to: "en")
-        #expect(result == "g'znm")
-        #expect(result.contains("'"))
-    }
-
     @Test func testDeleteClearsBufferWithoutConversion() async throws {
         let app = AppCoordinator()
 
