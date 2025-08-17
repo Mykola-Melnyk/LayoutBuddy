@@ -30,6 +30,8 @@ final class AppCoordinator: NSObject {
     }
     private var queuedEvents: [CGEvent] = []
     private let queuedEventsLock = NSLock()
+    // When running unit tests, avoid posting real keyboard events to the session.
+    private let isRunningUnitTests: Bool = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
     // Word tracking
     private var wordBuffer = ""
@@ -148,6 +150,9 @@ final class AppCoordinator: NSObject {
         let events = queuedEvents
         queuedEvents.removeAll()
         queuedEventsLock.unlock()
+
+        // In tests, just drop queued events without posting to the system.
+        if isRunningUnitTests { return }
 
         for e in events {
             e.post(tap: .cgAnnotatedSessionEventTap)
@@ -439,6 +444,7 @@ final class AppCoordinator: NSObject {
     }
 
     private func sendBackspace(times: Int) {
+        if isRunningUnitTests { return }
         guard times > 0 else { return }
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
         let vk = CGKeyCode(kVK_Delete)
@@ -449,6 +455,7 @@ final class AppCoordinator: NSObject {
     }
 
     private func typeUnicode(_ text: String) {
+        if isRunningUnitTests { return }
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
         for scalar in text.unicodeScalars {
             var u = UniChar(scalar.value)
@@ -462,6 +469,7 @@ final class AppCoordinator: NSObject {
     }
 
     private func tapKey(_ key: SpecialKey) {
+        if isRunningUnitTests { return }
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
         let code: CGKeyCode = (key == .leftArrow) ? CGKeyCode(kVK_LeftArrow) : CGKeyCode(kVK_RightArrow)
         CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: true)?.post(tap: .cgAnnotatedSessionEventTap)
@@ -469,6 +477,7 @@ final class AppCoordinator: NSObject {
     }
 
     private func tapKeyWithFlags(_ key: CGKeyCode, flags: CGEventFlags) {
+        if isRunningUnitTests { return }
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
         let down = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: true)
         down?.flags = flags
