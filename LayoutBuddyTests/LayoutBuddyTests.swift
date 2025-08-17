@@ -169,7 +169,7 @@ struct LayoutBuddyTests {
         let mapper = KeyboardLayoutMapper()
         let spell = SpellCheckerService()
         let fixer = AutoFixer(mapper: mapper, spellChecker: spell)
-        let result = fixer.autoFix(word: "ghbdtn", currentLangPrefix: "en")
+        let result = fixer.autoFix(word: "ghbdsn", currentLangPrefix: "en")
         #expect(result?.converted == "привіт")
         #expect(result?.targetLang == "uk")
     }

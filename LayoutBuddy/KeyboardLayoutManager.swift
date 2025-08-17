@@ -39,10 +39,10 @@ final class KeyboardLayoutManager {
                 .takeRetainedValue() as? [TISInputSource] else { return [] }
 
             let infos = list.compactMap { src -> InputSourceInfo? in
-                let id = (tisProperty(src, kTISPropertyInputSourceID) as? String) ?? ""
+                let id = (self.tisProperty(src, kTISPropertyInputSourceID) as? String) ?? ""
                 guard !id.isEmpty else { return nil }
-                let name = (tisProperty(src, kTISPropertyLocalizedName) as? String) ?? id
-                let langs = (tisProperty(src, kTISPropertyInputSourceLanguages) as? [String]) ?? []
+                let name = (self.tisProperty(src, kTISPropertyLocalizedName) as? String) ?? id
+                let langs = (self.tisProperty(src, kTISPropertyInputSourceLanguages) as? [String]) ?? []
                 return InputSourceInfo(id: id, name: name, languages: langs)
             }
             return infos.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -60,22 +60,22 @@ final class KeyboardLayoutManager {
     func currentInputSourceID() -> String {
         performOnMain {
             guard let cur = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else { return "" }
-            return (tisProperty(cur, kTISPropertyInputSourceID) as? String) ?? ""
+            return (self.tisProperty(cur, kTISPropertyInputSourceID) as? String) ?? ""
         }
     }
 
     // MARK: - Switching
     func toggleLayout() {
         performOnMain {
-            let current = currentInputSourceID()
-            let target = (current == preferences.secondaryID) ? preferences.primaryID : preferences.secondaryID
-            switchLayout(to: target)
+            let current = self.currentInputSourceID()
+            let target = (current == self.preferences.secondaryID) ? self.preferences.primaryID : self.preferences.secondaryID
+            self.switchLayout(to: target)
         }
     }
 
     /// Switches the current keyboard layout to the specified input source ID.
     func switchLayout(to id: String) {
-        performOnMain { switchToInputSource(id: id) }
+        performOnMain { self.switchToInputSource(id: id) }
     }
 
     private func switchToInputSource(id: String) {
