@@ -1,6 +1,13 @@
 import Cocoa
 import ApplicationServices
-import Carbon
+#if canImport(Carbon)
+import Carbon.HIToolbox
+#else
+let kVK_Delete: UInt16 = 51
+let kVK_ForwardDelete: UInt16 = 117
+let kVK_LeftArrow: UInt16 = 123
+let kVK_RightArrow: UInt16 = 124
+#endif
 
 /// Centralised key event processing. Maintains a `WordParser` and delegates
 /// spell‑checking and auto‑fixing to specialised services.

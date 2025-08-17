@@ -10,9 +10,16 @@ final class KeyboardLayoutManager {
     }
 
     /// Executes work on the main queue if invoked from a background thread.
-    private func performOnMain<T>(_ work: () -> T) -> T {
+    private func performOnMain<T>(_ work: @escaping () -> T) -> T {
         if Thread.isMainThread { return work() }
-        return DispatchQueue.main.sync(execute: work)
+        var result: T!
+        let sema = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async {
+            result = work()
+            sema.signal()
+        }
+        sema.wait()
+        return result
     }
 
     // MARK: - Input Source Info

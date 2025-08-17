@@ -33,9 +33,14 @@ final class MenuBarController: NSObject {
         if Thread.isMainThread {
             return NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         } else {
-            return DispatchQueue.main.sync {
-                NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            var item: NSStatusItem!
+            let sema = DispatchSemaphore(value: 0)
+            DispatchQueue.main.async {
+                item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+                sema.signal()
             }
+            sema.wait()
+            return item
         }
     }
 

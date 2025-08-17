@@ -8,11 +8,16 @@ final class SpellCheckerService {
     private let spellDocTag: Int = NSSpellChecker.uniqueSpellDocumentTag()
 
     // Executes work on the main queue if we're currently on a background thread.
-    private func performOnMain<T>(_ work: () -> T) -> T {
-        if Thread.isMainThread {
-            return work()
+    private func performOnMain<T>(_ work: @escaping () -> T) -> T {
+        if Thread.isMainThread { return work() }
+        var result: T!
+        let sema = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async {
+            result = work()
+            sema.signal()
         }
-        return DispatchQueue.main.sync(execute: work)
+        sema.wait()
+        return result
     }
 
     /// Finds the best available language that matches the prefix, e.g. "en" or "uk".
