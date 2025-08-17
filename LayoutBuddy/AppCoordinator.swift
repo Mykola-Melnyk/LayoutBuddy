@@ -23,8 +23,7 @@ final class AppCoordinator: NSObject {
 
 
     // Global key listener
-    private var eventTap: CFMachPort?
-    private var runLoopSrc: CFRunLoopSource?
+    private let eventTapController = EventTapController()
     private var isSynthesizing = false {
         didSet { if !isSynthesizing { flushQueuedEvents() } }
     }
@@ -66,6 +65,8 @@ final class AppCoordinator: NSObject {
         self.menuBar = MenuBarController(layoutManager: layoutManager)
         super.init()
 
+        eventTapController.delegate = self
+
         menuBar.onSetAsPrimary = { [weak self] id in
             guard let self else { return }
             self.preferences.primaryID = id
@@ -93,14 +94,11 @@ final class AppCoordinator: NSObject {
     func start() {
         NSApp.setActivationPolicy(.accessory)
         menuBar.updateStatusTitleAndColor()
-        setupEventTap()
+        eventTapController.start()
     }
 
     func stop() {
-        if let src = runLoopSrc { CFRunLoopRemoveSource(CFRunLoopGetCurrent(), src, .commonModes) }
-        if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: false) }
-        eventTap = nil
-        runLoopSrc = nil
+        eventTapController.stop()
     }
 
     // MARK: - Toggle
@@ -114,30 +112,6 @@ final class AppCoordinator: NSObject {
     // MARK: - Feedback
 
     private func playSwitchSound() { NSSound.beep() }
-
-    // MARK: - Event tap
-
-    private func setupEventTap() {
-        let mask = (1 << CGEventType.keyDown.rawValue)
-        guard let tap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .defaultTap,
-            eventsOfInterest: CGEventMask(mask),
-            callback: AppCoordinator.eventCallback,
-            userInfo: UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
-        ) else { return }
-        eventTap = tap
-        runLoopSrc = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSrc, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
-    }
-
-    private static let eventCallback: CGEventTapCallBack = { _, type, event, refcon in
-        guard let refcon else { return Unmanaged.passUnretained(event) }
-        let me = Unmanaged<AppCoordinator>.fromOpaque(refcon).takeUnretainedValue()
-        return me.handleKeyEvent(type: type, event: event)
-    }
 
     private func enqueueQueuedEvent(_ event: CGEvent) {
         queuedEventsLock.lock()
@@ -205,12 +179,12 @@ final class AppCoordinator: NSObject {
 
     // MARK: - Key handling
 
-    private func handleKeyEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+    private func handleKeyEvent(_ event: CGEvent) -> Unmanaged<CGEvent>? {
         if isSynthesizing {
             if let copy = event.copy() { enqueueQueuedEvent(copy) }
             return nil
         }
-        guard type == .keyDown else { return Unmanaged.passUnretained(event) }
+        guard event.type == .keyDown else { return Unmanaged.passUnretained(event) }
 
         let flags   = event.flags
         let hasCmd  = flags.contains(.maskCommand)
@@ -827,7 +801,7 @@ final class AppCoordinator: NSObject {
 
     /// Forward key events into the private handler for unit tests.
     func test_handleKeyEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
-        handleKeyEvent(type: type, event: event)
+        handleKeyEvent(event)
     }
 #endif
 }
@@ -842,7 +816,7 @@ extension AppCoordinator {
 
     /// Wrapper to access the private `handleKeyEvent` in tests.
     func testHandleKeyEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
-        handleKeyEvent(type: type, event: event)
+        handleKeyEvent(event)
     }
 
     /// Allows tests to toggle synthesizing state.
@@ -855,3 +829,10 @@ extension AppCoordinator {
     }
 }
 #endif
+
+// MARK: - EventTapControllerDelegate
+extension AppCoordinator: EventTapControllerDelegate {
+    func handle(event: CGEvent) -> Unmanaged<CGEvent>? {
+        handleKeyEvent(event)
+    }
+}
