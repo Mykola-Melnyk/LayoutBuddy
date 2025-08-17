@@ -32,12 +32,64 @@ struct LayoutBuddyTests {
 
     @Test func testAmbiguousEnglishWordHotkeyConversion() throws {
         let app = AppCoordinator()
+
+        // Simulate typing "the" while on the English layout
+        for scalar in "the".unicodeScalars {
+            guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
+                #expect(Bool(false), "Unable to create CGEvent for testing")
+                return
+            }
+            var ch: UniChar = UniChar(scalar.value)
+            event.keyboardSetUnicodeString(stringLength: 1, unicodeString: &ch)
+            _ = app.testHandleKeyEvent(type: .keyDown, event: event)
+        }
+
+        // Press Control+Option+Space to trigger hotkey conversion
+        guard let hotkey = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(49), keyDown: true) else {
+            #expect(Bool(false), "Unable to create hotkey CGEvent for testing")
+            return
+        }
+        hotkey.flags = [.maskControl, .maskAlternate]
+        let hotkeyResult = app.testHandleKeyEvent(type: .keyDown, event: hotkey)
+#if os(Linux)
+        #expect(hotkeyResult?.takeUnretainedValue() === hotkey)
+#else
+        #expect(hotkeyResult == nil)
+#endif
+
+        // Ensure the expected conversion mapping
         #expect(app.convert("the", from: "en", to: "uk") == "еру")
         #expect(app.convert("best cat", from: "en", to: "en") == "best cat")
     }
 
     @Test func testAmbiguousUkrainianWordHotkeyConversion() throws {
         let app = AppCoordinator()
+
+        // Simulate typing "еру" while on the Ukrainian layout
+        for scalar in "еру".unicodeScalars {
+            guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
+                #expect(Bool(false), "Unable to create CGEvent for testing")
+                return
+            }
+            var ch: UniChar = UniChar(scalar.value)
+            event.keyboardSetUnicodeString(stringLength: 1, unicodeString: &ch)
+            _ = app.testHandleKeyEvent(type: .keyDown, event: event)
+        }
+
+        // Hotkey to convert the ambiguous word
+        guard let hotkey = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(49), keyDown: true) else {
+            #expect(Bool(false), "Unable to create hotkey CGEvent for testing")
+            return
+        }
+        hotkey.flags = [.maskControl, .maskAlternate]
+        let hotkeyResult = app.testHandleKeyEvent(type: .keyDown, event: hotkey)
+#if os(Linux)
+        #expect(hotkeyResult?.takeUnretainedValue() === hotkey)
+#else
+        #expect(hotkeyResult == nil)
+#endif
+
+        // Ensure the expected conversion mapping
         #expect(app.convert("еру", from: "uk", to: "en") == "the")
         #expect(app.convert("нового розвитку", from: "uk", to: "uk") == "нового розвитку")
     }
