@@ -1,5 +1,6 @@
 import Cocoa
 import ApplicationServices
+import Carbon
 
 /// Centralised key event processing. Maintains a `WordParser` and delegates
 /// spell‑checking and auto‑fixing to specialised services.
