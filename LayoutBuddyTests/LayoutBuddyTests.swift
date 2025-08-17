@@ -31,6 +31,16 @@ struct LayoutBuddyTests {
         #expect(app.convert("руддщ", from: "uk", to: "en") == "hello")
     }
 
+    @MainActor private func waitForSynthesis(_ app: AppCoordinator, timeout: TimeInterval = 1.0) {
+        let end = Date().addingTimeInterval(timeout)
+        while Date() < end {
+            RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01))
+            if app.testLastDeletionCount() > 0 || app.testLastInserted() != nil {
+                return
+            }
+        }
+    }
+
     @Test func testAmbiguousEnglishWordHotkeyConversion_blackBox() async throws {
         let app = AppCoordinator()
         app.testBeginCaptureBuffer()
@@ -62,11 +72,7 @@ struct LayoutBuddyTests {
 #endif
         let result = app.testHandleKeyEvent(type: .keyDown, event: hotkey)
 
-        // Wait until synthesized edits are captured
-        for _ in 0..<20 {
-            if app.testLastDeletionCount() == 3 && app.testLastInserted() != nil { break }
-            try await Task.sleep(nanoseconds: 50_000_000)
-        }
+        waitForSynthesis(app)
 
 #if os(Linux)
         #expect(result?.takeUnretainedValue() === hotkey)
@@ -123,11 +129,7 @@ struct LayoutBuddyTests {
 #endif
         let result = app.testHandleKeyEvent(type: .keyDown, event: hotkey)
 
-        // Wait until synthesized edits are captured
-        for _ in 0..<20 {
-            if app.testLastDeletionCount() == 3 && app.testLastInserted() != nil { break }
-            try await Task.sleep(nanoseconds: 50_000_000)
-        }
+        waitForSynthesis(app)
 
 #if os(Linux)
         #expect(result?.takeUnretainedValue() === hotkey)
