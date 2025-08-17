@@ -50,7 +50,7 @@ struct LayoutBuddyTests {
         var at: UniChar = 64 // '@'
         event.keyboardSetUnicodeString(stringLength: 1, unicodeString: &at)
 
-        let returned = app.test_handleKeyEvent(type: .keyDown, event: event)?.takeUnretainedValue()
+        let returned = app.testHandleKeyEvent(type: .keyDown, event: event)?.takeUnretainedValue()
         #expect(returned === event)
 
         // Word buffer should be cleared to avoid layout switching inside email-like strings
