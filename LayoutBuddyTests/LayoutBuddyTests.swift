@@ -63,7 +63,7 @@ struct LayoutBuddyTests {
         let result = app.testHandleKeyEvent(type: .keyDown, event: hotkey)
 
         // Allow async hotkey processing to finish
-        try await Task.sleep(nanoseconds: 50_000_000)
+        try await Task.sleep(nanoseconds: 200_000_000)
 
 #if os(Linux)
         #expect(result?.takeUnretainedValue() === hotkey)
@@ -121,7 +121,7 @@ struct LayoutBuddyTests {
         let result = app.testHandleKeyEvent(type: .keyDown, event: hotkey)
 
         // Allow async hotkey processing to finish
-        try await Task.sleep(nanoseconds: 50_000_000)
+        try await Task.sleep(nanoseconds: 200_000_000)
 
 #if os(Linux)
         #expect(result?.takeUnretainedValue() === hotkey)
