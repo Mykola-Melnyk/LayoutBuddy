@@ -8,6 +8,16 @@
 import Testing
 @testable import LayoutBuddy
 
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
+
+#if canImport(Carbon)
+import Carbon
+#endif
+
+import Foundation
+
 struct LayoutBuddyTests {
 
     @Test func ukrainianWordConversionProducesAsciiApostrophe() throws {
