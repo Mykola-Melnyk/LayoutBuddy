@@ -156,7 +156,7 @@ final class AppCoordinator: NSObject {
         if hasCtrl && hasAlt && keyCode == CGKeyCode(kVK_Space) {
             dlog("[HOTKEY] pressed — stack=\(ambiguityStack.count)")
             if !ambiguityStack.isEmpty {
-                DispatchQueue.main.async { self.applyMostRecentAmbiguityAndRestoreCaret() }
+                Task { @MainActor in self.applyMostRecentAmbiguityAndRestoreCaret() }
             } else {
                 NSSound.beep()
             }
@@ -639,11 +639,7 @@ final class AppCoordinator: NSObject {
     }
 
     // Apply most recent candidate; try AX (precise), else keystroke fallback
-    private func applyMostRecentAmbiguityAndRestoreCaret() {
-        if !Thread.isMainThread {
-            DispatchQueue.main.async { self.applyMostRecentAmbiguityAndRestoreCaret() }
-            return
-        }
+    @MainActor private func applyMostRecentAmbiguityAndRestoreCaret() {
         guard let cand = ambiguityStack.popLast() else { return }
 
         // If saved blindly, skip straight to keystroke fallback
@@ -720,7 +716,7 @@ final class AppCoordinator: NSObject {
         fallbackNavigateAndReplace(cand)
     }
 
-    private func fallbackTypeOverSelection(el: AXUIElement, text: String, restoreCaretTo pos: Int) {
+    @MainActor private func fallbackTypeOverSelection(el: AXUIElement, text: String, restoreCaretTo pos: Int) {
         dlog("[FALLBACK typeover] start synth=\(isSynthesizing) curID=\(layoutManager.currentInputSourceID()) buffer=\(wordParser.buffer)")
         isSynthesizing = true
         typeUnicode(text)
