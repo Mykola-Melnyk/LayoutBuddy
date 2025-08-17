@@ -5,6 +5,8 @@ import Foundation
 /// used by consumers such as the key handler.
 final class WordParser {
     private(set) var wordBuffer = ""
+    /// Read-only view of the internal buffer for consumers like `AppCoordinator`.
+    var buffer: String { wordBuffer }
 
     // MARK: - Parsing helpers
 
