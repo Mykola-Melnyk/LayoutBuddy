@@ -164,4 +164,13 @@ struct LayoutBuddyTests {
         app.testSetSynthesizing(false)
         #expect(app.testQueuedEventsCount() == 0)
     }
+
+    @Test func autoFixerConvertsEnglishTypedUkrainianWord() throws {
+        let mapper = KeyboardLayoutMapper()
+        let spell = SpellCheckerService()
+        let fixer = AutoFixer(mapper: mapper, spellChecker: spell)
+        let result = fixer.autoFix(word: "ghbdtn", currentLangPrefix: "en")
+        #expect(result?.converted == "привіт")
+        #expect(result?.targetLang == "uk")
+    }
 }

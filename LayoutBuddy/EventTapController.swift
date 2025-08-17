@@ -1,12 +1,9 @@
 import Cocoa
 import ApplicationServices
 
-protocol EventTapControllerDelegate: AnyObject {
-    func handle(event: CGEvent) -> Unmanaged<CGEvent>?
-}
-
+/// Listens for global keyboard events and forwards them to a `KeyHandler`.
 final class EventTapController {
-    weak var delegate: EventTapControllerDelegate?
+    var keyHandler: KeyHandler?
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -41,8 +38,10 @@ final class EventTapController {
     private static let callback: CGEventTapCallBack = { _, _, event, refcon in
         guard let refcon else { return Unmanaged.passUnretained(event) }
         let controller = Unmanaged<EventTapController>.fromOpaque(refcon).takeUnretainedValue()
-        guard let delegate = controller.delegate else { return Unmanaged.passUnretained(event) }
-        return delegate.handle(event: event)
+        if let handler = controller.keyHandler {
+            return handler.handle(event: event)
+        }
+        return Unmanaged.passUnretained(event)
     }
 }
 
