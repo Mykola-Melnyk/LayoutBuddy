@@ -108,14 +108,8 @@ final class KeyHandler {
         guard !wordParser.buffer.isEmpty else { return }
         let curID = layoutManager.currentInputSourceID()
         let curLangPrefix = isLayoutUkrainian(curID) ? "uk" : "en"
-        let (core, trailingCount) = wordParser.splitTrailingMapped(wordParser.buffer)
-        if let fix = autoFixer.autoFix(word: core, currentLangPrefix: curLangPrefix) {
-            let trailing = String(wordParser.buffer.suffix(trailingCount))
-            let newWord = fix.converted + trailing
-            replaceLastWord(with: newWord,
-                            targetLangPrefix: fix.targetLang,
-                            keepFollowingBoundary: keepFollowingBoundary)
-        }
+        let (core, _) = wordParser.splitTrailingMapped(wordParser.buffer)
+        _ = autoFixer.autoFix(word: core, currentLangPrefix: curLangPrefix)
         wordParser.clear()
     }
 
@@ -170,77 +164,6 @@ final class KeyHandler {
     func testQueuedEventsCount() -> Int {
         queuedEventsLock.lock(); defer { queuedEventsLock.unlock() }
         return queuedEvents.count
-    }
-
-    // MARK: - Replacement helpers
-
-    private enum SpecialKey { case leftArrow, rightArrow }
-
-    private func replaceLastWord(with newWord: String,
-                                 targetLangPrefix: String,
-                                 keepFollowingBoundary: Bool) {
-        let deleteCount = wordParser.buffer.count
-        DispatchQueue.main.async {
-            self.isSynthesizing = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                if keepFollowingBoundary { self.tapKey(.leftArrow) }
-                self.sendBackspace(times: deleteCount)
-                self.ensureSwitch(to: targetLangPrefix) {
-                    self.typeUnicode(newWord)
-                    if keepFollowingBoundary { self.tapKey(.rightArrow) }
-                    self.isSynthesizing = false
-                }
-            }
-        }
-    }
-
-    private func ensureSwitch(to targetLangPrefix: String, completion: @escaping () -> Void) {
-        let curIsUkr = isLayoutUkrainian(layoutManager.currentInputSourceID())
-        let needUkr = (targetLangPrefix == "uk")
-        if curIsUkr != needUkr {
-            layoutManager.toggleLayout()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: completion)
-        } else {
-            completion()
-        }
-    }
-
-    private func sendBackspace(times: Int) {
-        if isRunningUnitTests { return }
-        guard times > 0 else { return }
-        guard let src = CGEventSource(stateID: .hidSystemState) else { return }
-        let vk = CGKeyCode(kVK_Delete)
-        for _ in 0..<times {
-            CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: true)?.post(tap: .cgAnnotatedSessionEventTap)
-            CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: false)?.post(tap: .cgAnnotatedSessionEventTap)
-        }
-    }
-
-    private func tapKey(_ key: SpecialKey) {
-        if isRunningUnitTests { return }
-        guard let src = CGEventSource(stateID: .hidSystemState) else { return }
-        let vk: CGKeyCode = {
-            switch key {
-            case .leftArrow: return CGKeyCode(kVK_LeftArrow)
-            case .rightArrow: return CGKeyCode(kVK_RightArrow)
-            }
-        }()
-        CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: true)?.post(tap: .cgAnnotatedSessionEventTap)
-        CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: false)?.post(tap: .cgAnnotatedSessionEventTap)
-    }
-
-    private func typeUnicode(_ text: String) {
-        if isRunningUnitTests { return }
-        guard let src = CGEventSource(stateID: .hidSystemState) else { return }
-        for scalar in text.unicodeScalars {
-            var u = UniChar(scalar.value)
-            let down = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true)
-            down?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &u)
-            down?.post(tap: .cgAnnotatedSessionEventTap)
-            let up = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false)
-            up?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &u)
-            up?.post(tap: .cgAnnotatedSessionEventTap)
-        }
     }
 }
 
