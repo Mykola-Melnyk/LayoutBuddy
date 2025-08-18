@@ -127,6 +127,9 @@ final class AppCoordinator: NSObject {
 
         // In tests, just drop queued events without posting to the system.
         if isRunningUnitTests { return }
+        #if DEBUG
+        if testSimulationMode { return }
+        #endif
 
         for e in events {
             e.post(tap: .cgAnnotatedSessionEventTap)
@@ -379,6 +382,9 @@ final class AppCoordinator: NSObject {
 
     private func sendBackspace(times: Int) {
         if isRunningUnitTests { return }
+        #if DEBUG
+        if testSimulationMode { return }
+        #endif
         guard times > 0 else { return }
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
         let vk = CGKeyCode(kVK_Delete)
@@ -390,6 +396,9 @@ final class AppCoordinator: NSObject {
 
     private func typeUnicode(_ text: String) {
         if isRunningUnitTests { return }
+        #if DEBUG
+        if testSimulationMode { return }
+        #endif
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
         for scalar in text.unicodeScalars {
             var u = UniChar(scalar.value)
@@ -404,6 +413,9 @@ final class AppCoordinator: NSObject {
 
     private func tapKey(_ key: SpecialKey) {
         if isRunningUnitTests { return }
+        #if DEBUG
+        if testSimulationMode { return }
+        #endif
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
         let code: CGKeyCode = (key == .leftArrow) ? CGKeyCode(kVK_LeftArrow) : CGKeyCode(kVK_RightArrow)
         CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: true)?.post(tap: .cgAnnotatedSessionEventTap)
@@ -412,6 +424,9 @@ final class AppCoordinator: NSObject {
 
     private func tapKeyWithFlags(_ key: CGKeyCode, flags: CGEventFlags) {
         if isRunningUnitTests { return }
+        #if DEBUG
+        if testSimulationMode { return }
+        #endif
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
         let down = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: true)
         down?.flags = flags
@@ -725,6 +740,12 @@ final class AppCoordinator: NSObject {
     }
 
     private func fallbackNavigateAndReplace(_ cand: AmbiguousCandidate) {
+        #if DEBUG
+        if isRunningUnitTests || testSimulationMode {
+            _ = testSimulateAmbiguityOnTestText(cand)
+            return
+        }
+        #endif
         DispatchQueue.main.async {
             let curID = self.layoutManager.currentInputSourceID()
             let targetID = self.layoutID(forLanguagePrefix: cand.targetLangPrefix) ?? self.otherLayoutID()
@@ -782,6 +803,64 @@ extension AppCoordinator {
     func testQueuedEventsCount() -> Int {
         queuedEventsLock.lock(); defer { queuedEventsLock.unlock() }
         return queuedEvents.count
+    }
+
+    // Enable deterministic simulation mode for unit tests (no CGEvents posted).
+    func testSetSimulationMode(_ on: Bool) { AppCoordinator._testSimulationMode = on }
+    private var testSimulationMode: Bool { AppCoordinator._testSimulationMode }
+    private static var _testSimulationMode: Bool = false
+
+    // A simple test buffer holding the full text for unit tests.
+    var testDocumentText: String {
+        get { AppCoordinator._testDocumentText }
+        set { AppCoordinator._testDocumentText = newValue }
+    }
+    private static var _testDocumentText: String = ""
+
+    // Simulate applying the ambiguity to the test text (words separated by spaces).
+    private func testSimulateAmbiguityOnTestText(_ cand: AmbiguousCandidate) -> Bool {
+        var parts = testDocumentText.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
+        guard !parts.isEmpty else { return false }
+        let idx = max(0, parts.count - 1 - cand.wordsAhead)
+        guard idx < parts.count else { return false }
+        if parts[idx] == cand.original { parts[idx] = cand.converted }
+        else { parts[idx] = cand.converted }
+        testDocumentText = parts.joined(separator: " ")
+        return true
+    }
+
+    /// Seed an ambiguity candidate for tests.
+    func testPushAmbiguity(original: String, converted: String, targetLangPrefix: String, wordsAhead: Int) {
+        let cand = AmbiguousCandidate(
+            element: nil, pid: 0, range: nil,
+            original: original, converted: converted,
+            before: "", after: "",
+            when: CFAbsoluteTimeGetCurrent(),
+            targetLangPrefix: targetLangPrefix,
+            keystrokeOnly: true, wordsAhead: wordsAhead
+        )
+        ambiguityStack.append(cand)
+    }
+
+    /// Invoke hotkey application directly in tests.
+    func testApplyMostRecentAmbiguityNow() {
+        applyMostRecentAmbiguityAndRestoreCaret()
+    }
+
+    /// Apply the most recent ambiguity synchronously for deterministic tests.
+    func testApplyMostRecentAmbiguitySynchronously() {
+        guard !ambiguityStack.isEmpty else { return }
+        let cand = ambiguityStack.removeLast()
+        if isRunningUnitTests {
+            _ = testSimulateAmbiguityOnTestText(cand)
+            return
+        }
+        if testSimulationMode {
+            _ = testSimulateAmbiguityOnTestText(cand)
+            return
+        }
+        // Fallback to normal path
+        fallbackNavigateAndReplace(cand)
     }
 }
 #endif

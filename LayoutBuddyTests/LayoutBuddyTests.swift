@@ -19,6 +19,16 @@ import Carbon
 import Foundation
 
 struct LayoutBuddyTests {
+    
+    @Test func testEnglishInputProducesUkrainianOutput() throws {
+            let app = AppCoordinator()
+            #expect(app.convert("ghbdsn", from: "en", to: "uk") == "привіт")
+        }
+
+    @Test func testUkrainianInputProducesEnglishOutput() throws {
+            let app = AppCoordinator()
+            #expect(app.convert("руддщ", from: "uk", to: "en") == "hello")
+        }
 
     @Test func testDeleteClearsBufferWithoutConversion() async throws {
         let app = AppCoordinator()
@@ -163,5 +173,22 @@ struct LayoutBuddyTests {
 
         app.testSetSynthesizing(false)
         #expect(app.testQueuedEventsCount() == 0)
+    }
+
+    @Test func testHotkeyAppliesAmbiguityToMostRecentWord() throws {
+        let app = AppCoordinator()
+        app.testSetSimulationMode(true)
+        // Simulate having typed: "the best cat" with English layout
+        app.testDocumentText = "the best cat"
+
+        // Seed an ambiguity for the word "the" that should convert to Ukrainian-position mapping "еру".
+        // Since two words were typed after it ("best", "cat"), wordsAhead is 2.
+        app.testPushAmbiguity(original: "the", converted: "еру", targetLangPrefix: "uk", wordsAhead: 2)
+
+        // Apply the most recent ambiguity synchronously for deterministic assert.
+        app.testApplyMostRecentAmbiguitySynchronously()
+
+        // Verify only the first word is converted.
+        #expect(app.testDocumentText == "еру best cat")
     }
 }
