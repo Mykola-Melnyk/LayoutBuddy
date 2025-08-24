@@ -6,6 +6,29 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		7A9CB5D42E5B2755003A1C37 /* PopoverAmbiguityPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5C42E5B2755003A1C37 /* PopoverAmbiguityPresenter.swift */; };
+		7A9CB5D52E5B2755003A1C37 /* MenuBarUI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5CB2E5B2755003A1C37 /* MenuBarUI.swift */; };
+		7A9CB5D62E5B2755003A1C37 /* AmbiguityPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5C92E5B2755003A1C37 /* AmbiguityPresenter.swift */; };
+		7A9CB5D72E5B2755003A1C37 /* Resolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5C72E5B2755003A1C37 /* Resolver.swift */; };
+		7A9CB5D82E5B2755003A1C37 /* AXPermissions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5BE2E5B2755003A1C37 /* AXPermissions.swift */; };
+		7A9CB5D92E5B2755003A1C37 /* RefactorCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5D22E5B2755003A1C37 /* RefactorCoordinator.swift */; };
+		7A9CB5DA2E5B2755003A1C37 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5BB2E5B2755003A1C37 /* Models.swift */; };
+		7A9CB5DB2E5B2755003A1C37 /* EventTapInputMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5C32E5B2755003A1C37 /* EventTapInputMonitor.swift */; };
+		7A9CB5DC2E5B2755003A1C37 /* AppCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5D02E5B2755003A1C37 /* AppCoordinator.swift */; };
+		7A9CB5DD2E5B2755003A1C37 /* LayoutMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5C62E5B2755003A1C37 /* LayoutMapper.swift */; };
+		7A9CB5DE2E5B2755003A1C37 /* WordBoundaries.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5BC2E5B2755003A1C37 /* WordBoundaries.swift */; };
+		7A9CB5DF2E5B2755003A1C37 /* Permissions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5CC2E5B2755003A1C37 /* Permissions.swift */; };
+		7A9CB5E02E5B2755003A1C37 /* EventSynthesizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5C22E5B2755003A1C37 /* EventSynthesizer.swift */; };
+		7A9CB5E12E5B2755003A1C37 /* AXTextCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5C02E5B2755003A1C37 /* AXTextCapture.swift */; };
+		7A9CB5E22E5B2755003A1C37 /* EventQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5C12E5B2755003A1C37 /* EventQueue.swift */; };
+		7A9CB5E32E5B2755003A1C37 /* AppMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5D12E5B2755003A1C37 /* AppMode.swift */; };
+		7A9CB5E42E5B2755003A1C37 /* TextCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5CE2E5B2755003A1C37 /* TextCapture.swift */; };
+		7A9CB5E52E5B2755003A1C37 /* InputMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5CA2E5B2755003A1C37 /* InputMonitor.swift */; };
+		7A9CB5E62E5B2755003A1C37 /* ReplacementPerformer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5CD2E5B2755003A1C37 /* ReplacementPerformer.swift */; };
+		7A9CB5E72E5B2755003A1C37 /* AXReplacementPerformer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5BF2E5B2755003A1C37 /* AXReplacementPerformer.swift */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		7A8CF44D2E48784400BAFEBE /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -27,6 +50,26 @@
 		7A8CF43E2E48784300BAFEBE /* LayoutBuddy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LayoutBuddy.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7A8CF44C2E48784400BAFEBE /* LayoutBuddyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LayoutBuddyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		7A8CF4562E48784400BAFEBE /* LayoutBuddyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LayoutBuddyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		7A9CB5BB2E5B2755003A1C37 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		7A9CB5BC2E5B2755003A1C37 /* WordBoundaries.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WordBoundaries.swift; sourceTree = "<group>"; };
+		7A9CB5BE2E5B2755003A1C37 /* AXPermissions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AXPermissions.swift; sourceTree = "<group>"; };
+		7A9CB5BF2E5B2755003A1C37 /* AXReplacementPerformer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AXReplacementPerformer.swift; sourceTree = "<group>"; };
+		7A9CB5C02E5B2755003A1C37 /* AXTextCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AXTextCapture.swift; sourceTree = "<group>"; };
+		7A9CB5C12E5B2755003A1C37 /* EventQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventQueue.swift; sourceTree = "<group>"; };
+		7A9CB5C22E5B2755003A1C37 /* EventSynthesizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventSynthesizer.swift; sourceTree = "<group>"; };
+		7A9CB5C32E5B2755003A1C37 /* EventTapInputMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventTapInputMonitor.swift; sourceTree = "<group>"; };
+		7A9CB5C42E5B2755003A1C37 /* PopoverAmbiguityPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PopoverAmbiguityPresenter.swift; sourceTree = "<group>"; };
+		7A9CB5C62E5B2755003A1C37 /* LayoutMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutMapper.swift; sourceTree = "<group>"; };
+		7A9CB5C72E5B2755003A1C37 /* Resolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Resolver.swift; sourceTree = "<group>"; };
+		7A9CB5C92E5B2755003A1C37 /* AmbiguityPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmbiguityPresenter.swift; sourceTree = "<group>"; };
+		7A9CB5CA2E5B2755003A1C37 /* InputMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputMonitor.swift; sourceTree = "<group>"; };
+		7A9CB5CB2E5B2755003A1C37 /* MenuBarUI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarUI.swift; sourceTree = "<group>"; };
+		7A9CB5CC2E5B2755003A1C37 /* Permissions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Permissions.swift; sourceTree = "<group>"; };
+		7A9CB5CD2E5B2755003A1C37 /* ReplacementPerformer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplacementPerformer.swift; sourceTree = "<group>"; };
+		7A9CB5CE2E5B2755003A1C37 /* TextCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextCapture.swift; sourceTree = "<group>"; };
+		7A9CB5D02E5B2755003A1C37 /* AppCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppCoordinator.swift; sourceTree = "<group>"; };
+		7A9CB5D12E5B2755003A1C37 /* AppMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppMode.swift; sourceTree = "<group>"; };
+		7A9CB5D22E5B2755003A1C37 /* RefactorCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RefactorCoordinator.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -75,6 +118,7 @@
 		7A8CF4352E48784300BAFEBE = {
 			isa = PBXGroup;
 			children = (
+				7A9CB5D32E5B2755003A1C37 /* Refactor */,
 				7A8CF4402E48784300BAFEBE /* LayoutBuddy */,
 				7A8CF44F2E48784400BAFEBE /* LayoutBuddyTests */,
 				7A8CF4592E48784400BAFEBE /* LayoutBuddyUITests */,
@@ -90,6 +134,65 @@
 				7A8CF4562E48784400BAFEBE /* LayoutBuddyUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		7A9CB5BD2E5B2755003A1C37 /* Domain */ = {
+			isa = PBXGroup;
+			children = (
+				7A9CB5BB2E5B2755003A1C37 /* Models.swift */,
+				7A9CB5BC2E5B2755003A1C37 /* WordBoundaries.swift */,
+			);
+			path = Domain;
+			sourceTree = "<group>";
+		};
+		7A9CB5C52E5B2755003A1C37 /* Impl */ = {
+			isa = PBXGroup;
+			children = (
+				7A9CB5BE2E5B2755003A1C37 /* AXPermissions.swift */,
+				7A9CB5BF2E5B2755003A1C37 /* AXReplacementPerformer.swift */,
+				7A9CB5C02E5B2755003A1C37 /* AXTextCapture.swift */,
+				7A9CB5C12E5B2755003A1C37 /* EventQueue.swift */,
+				7A9CB5C22E5B2755003A1C37 /* EventSynthesizer.swift */,
+				7A9CB5C32E5B2755003A1C37 /* EventTapInputMonitor.swift */,
+				7A9CB5C42E5B2755003A1C37 /* PopoverAmbiguityPresenter.swift */,
+			);
+			path = Impl;
+			sourceTree = "<group>";
+		};
+		7A9CB5C82E5B2755003A1C37 /* Resolver */ = {
+			isa = PBXGroup;
+			children = (
+				7A9CB5C62E5B2755003A1C37 /* LayoutMapper.swift */,
+				7A9CB5C72E5B2755003A1C37 /* Resolver.swift */,
+			);
+			path = Resolver;
+			sourceTree = "<group>";
+		};
+		7A9CB5CF2E5B2755003A1C37 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				7A9CB5C92E5B2755003A1C37 /* AmbiguityPresenter.swift */,
+				7A9CB5CA2E5B2755003A1C37 /* InputMonitor.swift */,
+				7A9CB5CB2E5B2755003A1C37 /* MenuBarUI.swift */,
+				7A9CB5CC2E5B2755003A1C37 /* Permissions.swift */,
+				7A9CB5CD2E5B2755003A1C37 /* ReplacementPerformer.swift */,
+				7A9CB5CE2E5B2755003A1C37 /* TextCapture.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		7A9CB5D32E5B2755003A1C37 /* Refactor */ = {
+			isa = PBXGroup;
+			children = (
+				7A9CB5BD2E5B2755003A1C37 /* Domain */,
+				7A9CB5C52E5B2755003A1C37 /* Impl */,
+				7A9CB5C82E5B2755003A1C37 /* Resolver */,
+				7A9CB5CF2E5B2755003A1C37 /* Services */,
+				7A9CB5D02E5B2755003A1C37 /* AppCoordinator.swift */,
+				7A9CB5D12E5B2755003A1C37 /* AppMode.swift */,
+				7A9CB5D22E5B2755003A1C37 /* RefactorCoordinator.swift */,
+			);
+			path = Refactor;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -236,6 +339,26 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7A9CB5D42E5B2755003A1C37 /* PopoverAmbiguityPresenter.swift in Sources */,
+				7A9CB5D52E5B2755003A1C37 /* MenuBarUI.swift in Sources */,
+				7A9CB5D62E5B2755003A1C37 /* AmbiguityPresenter.swift in Sources */,
+				7A9CB5D72E5B2755003A1C37 /* Resolver.swift in Sources */,
+				7A9CB5D82E5B2755003A1C37 /* AXPermissions.swift in Sources */,
+				7A9CB5D92E5B2755003A1C37 /* RefactorCoordinator.swift in Sources */,
+				7A9CB5DA2E5B2755003A1C37 /* Models.swift in Sources */,
+				7A9CB5DB2E5B2755003A1C37 /* EventTapInputMonitor.swift in Sources */,
+				7A9CB5DC2E5B2755003A1C37 /* AppCoordinator.swift in Sources */,
+				7A9CB5DD2E5B2755003A1C37 /* LayoutMapper.swift in Sources */,
+				7A9CB5DE2E5B2755003A1C37 /* WordBoundaries.swift in Sources */,
+				7A9CB5DF2E5B2755003A1C37 /* Permissions.swift in Sources */,
+				7A9CB5E02E5B2755003A1C37 /* EventSynthesizer.swift in Sources */,
+				7A9CB5E12E5B2755003A1C37 /* AXTextCapture.swift in Sources */,
+				7A9CB5E22E5B2755003A1C37 /* EventQueue.swift in Sources */,
+				7A9CB5E32E5B2755003A1C37 /* AppMode.swift in Sources */,
+				7A9CB5E42E5B2755003A1C37 /* TextCapture.swift in Sources */,
+				7A9CB5E52E5B2755003A1C37 /* InputMonitor.swift in Sources */,
+				7A9CB5E62E5B2755003A1C37 /* ReplacementPerformer.swift in Sources */,
+				7A9CB5E72E5B2755003A1C37 /* AXReplacementPerformer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

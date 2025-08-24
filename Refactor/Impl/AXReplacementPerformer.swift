@@ -19,6 +19,9 @@ final class AXReplacementPerformer: ReplacementPerformer {
     func synthesizeInsertion(_ text: String) {
         synth.typeString(text)
     }
+    
+    func synthesizeDeleteWordLeft() {
+        synth.deleteWordLeft() }
 
     func replace(in element: AXUIElement, range: TextRange, with text: String) async throws {
         // Set selected text range to our range

@@ -30,4 +30,18 @@ final class EventSynthesizer {
       queue.enqueue(evUp)
     }
   }
+ 
+    func deleteWordLeft() {
+        let key: CGKeyCode = 0x33 // delete
+        if let down = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: true) {
+            down.flags = .maskAlternate
+            queue.enqueue(down)
+        }
+        if let up = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: false) {
+            up.flags = .maskAlternate
+            queue.enqueue(up)
+        }
+    }
+
+        
 }
