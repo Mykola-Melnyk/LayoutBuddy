@@ -202,7 +202,11 @@ final class AppCoordinator: NSObject {
 
         // Hotkey: Control + Option + Command + 0 → toggle conversion
         if hasCmd && hasCtrl && hasAlt && keyCode == CGKeyCode(kVK_ANSI_0) {
-            DispatchQueue.main.async { self.toggleConversion() }
+            if isRunningUnitTests {
+                toggleConversion()
+            } else {
+                DispatchQueue.main.async { self.toggleConversion() }
+            }
             return nil
         }
 

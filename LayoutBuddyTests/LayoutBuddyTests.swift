@@ -209,6 +209,12 @@ struct LayoutBuddyTests {
         }
         event.flags = CGEventFlags([.maskCommand, .maskControl, .maskAlternate])
 
+        defer {
+            if !app.testConversionOn {
+                _ = app.testHandleKeyEvent(type: .keyDown, event: event)
+            }
+        }
+
         _ = app.testHandleKeyEvent(type: .keyDown, event: event)
         #expect(!app.testConversionOn)
 
