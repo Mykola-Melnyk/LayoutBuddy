@@ -2,6 +2,81 @@ import Cocoa
 import Carbon              // TIS* APIs + kVK_* keycodes
 import ApplicationServices // Accessibility (AX) APIs
 
+#if canImport(ApplicationServices)
+struct AXTextElement {
+    let element: AXUIElement?
+    init(element: AXUIElement? = nil) { self.element = element }
+}
+
+protocol AXClient {
+    func focusedTextElement() -> AXTextElement?
+    func readValue(_ el: AXTextElement) -> String?
+    func readSelectedRange(_ el: AXTextElement) -> NSRange?
+    func replace(_ el: AXTextElement, in range: NSRange, with string: String) -> Bool
+}
+
+final class RealAXClient: AXClient {
+    func focusedTextElement() -> AXTextElement? {
+        let sys = AXUIElementCreateSystemWide()
+        func copyAXElement(_ el: AXUIElement, _ attr: CFString) -> AXUIElement? {
+            var ref: CFTypeRef?
+            let err = AXUIElementCopyAttributeValue(el, attr, &ref)
+            guard err == .success, let val = ref, CFGetTypeID(val) == AXUIElementGetTypeID() else { return nil }
+            return (val as! AXUIElement)
+        }
+        if let direct = copyAXElement(sys, kAXFocusedUIElementAttribute as CFString) { return AXTextElement(element: direct) }
+        if let appEl = copyAXElement(sys, kAXFocusedApplicationAttribute as CFString),
+           let el = copyAXElement(appEl, kAXFocusedUIElementAttribute as CFString) { return AXTextElement(element: el) }
+        if let app = NSWorkspace.shared.frontmostApplication {
+            let appEl = AXUIElementCreateApplication(app.processIdentifier)
+            if let el = copyAXElement(appEl, kAXFocusedUIElementAttribute as CFString) { return AXTextElement(element: el) }
+            if let winEl = copyAXElement(appEl, kAXFocusedWindowAttribute as CFString),
+               let el = copyAXElement(winEl, kAXFocusedUIElementAttribute as CFString) { return AXTextElement(element: el) }
+        }
+        return nil
+    }
+
+    func readValue(_ el: AXTextElement) -> String? {
+        guard let element = el.element else { return nil }
+        var ref: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &ref) == .success,
+           let val = ref, CFGetTypeID(val) == CFStringGetTypeID() {
+            return val as? String
+        }
+        return nil
+    }
+
+    func readSelectedRange(_ el: AXTextElement) -> NSRange? {
+        guard let element = el.element else { return nil }
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &ref) == .success,
+              let val = ref, CFGetTypeID(val) == AXValueGetTypeID() else { return nil }
+        let axVal = val as! AXValue
+        var cfr = CFRange()
+        if AXValueGetType(axVal) == .cfRange, AXValueGetValue(axVal, .cfRange, &cfr) {
+            return NSRange(location: cfr.location, length: cfr.length)
+        }
+        return nil
+    }
+
+    func replace(_ el: AXTextElement, in range: NSRange, with string: String) -> Bool {
+        guard let element = el.element, let full = readValue(el) else { return false }
+        let ns = full as NSString
+        if range.location + range.length > ns.length { return false }
+        let newText = ns.replacingCharacters(in: range, with: string)
+        var cfr = CFRange(location: range.location, length: range.length)
+        guard let v = AXValueCreate(.cfRange, &cfr) else { return false }
+        _ = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, v)
+        let ok = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, newText as CFTypeRef) == .success
+        var caret = CFRange(location: range.location + (string as NSString).length, length: 0)
+        if let caretVal = AXValueCreate(.cfRange, &caret) {
+            _ = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, caretVal)
+        }
+        return ok
+    }
+}
+#endif
+
 
 final class AppCoordinator: NSObject {
 
@@ -36,14 +111,15 @@ final class AppCoordinator: NSObject {
     private var wordParser = WordParser()
     private var inEmail = false
 
+    var axClient: AXClient = RealAXClient()
+
     // Spellchecker
     private let spellDocTag: Int = NSSpellChecker.uniqueSpellDocumentTag()
 
     // Ambiguity “fix later” stack
     private struct AmbiguousCandidate {
-        let element: AXUIElement?          // nil when AX was unavailable
-        let pid: pid_t                     // frontmost app pid when blind
-        let range: CFRange?                // nil when blind
+        let element: AXTextElement?        // nil when AX was unavailable
+        let range: NSRange?                // nil when blind
         let original: String
         let converted: String
         let before: String
@@ -523,84 +599,10 @@ final class AppCoordinator: NSObject {
 
     // MARK: - Accessibility helpers & tie capture
 
-    private func axFocusedElement() -> AXUIElement? {
-        let sys = AXUIElementCreateSystemWide()
-
-        func copyAXElement(_ el: AXUIElement, _ attr: CFString) -> AXUIElement? {
-            var ref: CFTypeRef?
-            let err = AXUIElementCopyAttributeValue(el, attr, &ref)
-            guard err == .success, let val = ref, CFGetTypeID(val) == AXUIElementGetTypeID() else { return nil }
-            return (val as! AXUIElement)
-        }
-
-        if let direct = copyAXElement(sys, kAXFocusedUIElementAttribute as CFString) { return direct }
-
-        if let appEl = copyAXElement(sys, kAXFocusedApplicationAttribute as CFString),
-           let el = copyAXElement(appEl, kAXFocusedUIElementAttribute as CFString) { return el }
-
-        if let app = NSWorkspace.shared.frontmostApplication {
-            let appEl = AXUIElementCreateApplication(app.processIdentifier)
-            if let el = copyAXElement(appEl, kAXFocusedUIElementAttribute as CFString) { return el }
-            if let winEl = copyAXElement(appEl, kAXFocusedWindowAttribute as CFString),
-               let el = copyAXElement(winEl, kAXFocusedUIElementAttribute as CFString) { return el }
-        }
-        return nil
-    }
-
-    private func axPID(_ el: AXUIElement) -> pid_t {
-        var pid: pid_t = 0; AXUIElementGetPid(el, &pid); return pid
-    }
-
-    private func axStringValue(_ el: AXUIElement) -> String? {
-        var ref: CFTypeRef?
-        if AXUIElementCopyAttributeValue(el, kAXValueAttribute as CFString, &ref) == .success,
-           let s = ref as? String { return s }
-        return nil
-    }
-
-    private func axSelectedRange(_ el: AXUIElement) -> NSRange? {
-        var ref: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(el, kAXSelectedTextRangeAttribute as CFString, &ref) == .success,
-              let val = ref,
-              CFGetTypeID(val) == AXValueGetTypeID() else { return nil }
-        let axVal = val as! AXValue
-        var cfr = CFRange(location: 0, length: 0)
-        if AXValueGetType(axVal) == .cfRange, AXValueGetValue(axVal, .cfRange, &cfr) {
-            return NSRange(location: cfr.location, length: cfr.length)
-        }
-        return nil
-    }
-
-    private func axStringForRange(_ el: AXUIElement, _ range: CFRange) -> String? {
-        var r = range
-        guard let param = AXValueCreate(.cfRange, &r) else { return nil }
-        var ref: CFTypeRef?
-        if AXUIElementCopyParameterizedAttributeValue(
-            el,
-            kAXStringForRangeParameterizedAttribute as CFString,
-            param,
-            &ref
-        ) == .success, let s = ref as? String {
-            return s
-        }
-        return nil
-    }
-
-    private func axSetSelectedRange(_ el: AXUIElement, _ range: NSRange) -> Bool {
-        var cfr = CFRange(location: range.location, length: range.length)
-        guard let v = AXValueCreate(.cfRange, &cfr) else { return false }
-        return AXUIElementSetAttributeValue(el, kAXSelectedTextRangeAttribute as CFString, v) == .success
-    }
-
-    private func axSetStringValue(_ el: AXUIElement, _ newValue: String) -> Bool {
-        AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, newValue as CFTypeRef) == .success
-    }
-
     // If AX fails at capture time, push a "blind" candidate so hotkey can still fix it.
     private func pushBlindAmbiguity(original: String, converted: String, targetLangPrefix: String) {
-        let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
         let cand = AmbiguousCandidate(
-            element: nil, pid: pid, range: nil,
+            element: nil, range: nil,
             original: original, converted: converted,
             before: "", after: "",
             when: CFAbsoluteTimeGetCurrent(),
@@ -632,21 +634,24 @@ final class AppCoordinator: NSObject {
     }
 
     private func captureAmbiguity(original: String, converted: String, targetLangPrefix: String) {
-        if let el = axFocusedElement(), let caret = axSelectedRange(el) {
+        if let el = axClient.focusedTextElement(),
+           let caret = axClient.readSelectedRange(el),
+           let full = axClient.readValue(el) {
+            let ns = full as NSString
             let coreLen = (original as NSString).length
             if caret.location >= coreLen {
                 let wordStart = caret.location - coreLen
-                let wordRange = CFRange(location: wordStart, length: coreLen)
-                if let word = axStringForRange(el, wordRange), word == original {
+                let wordRange = NSRange(location: wordStart, length: coreLen)
+                if wordStart + coreLen <= ns.length,
+                   ns.substring(with: wordRange) == original {
                     let beforeStart = max(0, wordStart - contextRadius)
-                    let beforeRange = CFRange(location: beforeStart, length: wordStart - beforeStart)
-                    let afterRange = CFRange(location: caret.location, length: contextRadius)
-                    let before = axStringForRange(el, beforeRange) ?? ""
-                    let after = axStringForRange(el, afterRange) ?? ""
+                    let before = ns.substring(with: NSRange(location: beforeStart, length: wordStart - beforeStart))
+                    let afterStart = caret.location
+                    let afterLen = min(contextRadius, ns.length - afterStart)
+                    let after = ns.substring(with: NSRange(location: afterStart, length: afterLen))
 
                     let cand = AmbiguousCandidate(
                         element: el,
-                        pid: axPID(el),
                         range: wordRange,
                         original: original,
                         converted: converted,
@@ -663,37 +668,32 @@ final class AppCoordinator: NSObject {
                     return
                 }
 
-                // Fallback to older full-string search
-                if let full = axStringValue(el) {
-                    let ns = full as NSString
-                    let searchStart = max(0, caret.location - coreLen - 64)
-                    let window = NSRange(location: searchStart, length: max(0, caret.location - searchStart))
-                    let found = ns.range(of: original, options: [.backwards], range: window)
-                    if found.location != NSNotFound {
-                        let beforeLen = min(contextRadius, found.location)
-                        let afterStart = found.location + found.length
-                        let afterLen = min(contextRadius, ns.length - afterStart)
-                        let before = ns.substring(with: NSRange(location: found.location - beforeLen, length: beforeLen))
-                        let after  = ns.substring(with: NSRange(location: afterStart, length: afterLen))
+                let searchStart = max(0, caret.location - coreLen - 64)
+                let window = NSRange(location: searchStart, length: max(0, caret.location - searchStart))
+                let found = ns.range(of: original, options: [.backwards], range: window)
+                if found.location != NSNotFound {
+                    let beforeLen = min(contextRadius, found.location)
+                    let afterStart = found.location + found.length
+                    let afterLen = min(contextRadius, ns.length - afterStart)
+                    let before = ns.substring(with: NSRange(location: found.location - beforeLen, length: beforeLen))
+                    let after  = ns.substring(with: NSRange(location: afterStart, length: afterLen))
 
-                        let cand = AmbiguousCandidate(
-                            element: el,
-                            pid: axPID(el),
-                            range: CFRange(location: found.location, length: found.length),
-                            original: original,
-                            converted: converted,
-                            before: before,
-                            after: after,
-                            when: CFAbsoluteTimeGetCurrent(),
-                            targetLangPrefix: targetLangPrefix,
-                            keystrokeOnly: false,
-                            wordsAhead: 0
-                        )
-                        ambiguityStack.append(cand)
-                        if ambiguityStack.count > ambiguityMax { _ = ambiguityStack.removeFirst() }
-                        dlog("[TIE] saved: “\(original)” → “\(converted)” — stack=\(ambiguityStack.count)")
-                        return
-                    }
+                    let cand = AmbiguousCandidate(
+                        element: el,
+                        range: found,
+                        original: original,
+                        converted: converted,
+                        before: before,
+                        after: after,
+                        when: CFAbsoluteTimeGetCurrent(),
+                        targetLangPrefix: targetLangPrefix,
+                        keystrokeOnly: false,
+                        wordsAhead: 0
+                    )
+                    ambiguityStack.append(cand)
+                    if ambiguityStack.count > ambiguityMax { _ = ambiguityStack.removeFirst() }
+                    dlog("[TIE] saved: “\(original)” → “\(converted)” — stack=\(ambiguityStack.count)")
+                    return
                 }
             }
         }
@@ -709,26 +709,20 @@ final class AppCoordinator: NSObject {
         }
         guard let cand = ambiguityStack.popLast() else { return }
 
-        // If saved blindly, skip straight to keystroke fallback
         if cand.keystrokeOnly {
             fallbackNavigateAndReplace(cand)
             return
         }
 
-        // Try AX path
-        if let el = cand.element, axPID(el) == cand.pid,
-           let caretBefore = axSelectedRange(el),
-           var full = axStringValue(el) {
-
+        if let el = cand.element,
+           var full = axClient.readValue(el) {
             let ns = full as NSString
-            guard let cr = cand.range else { fallbackNavigateAndReplace(cand); return }
-            var finalRange = NSRange(location: cr.location, length: cr.length)
+            guard var finalRange = cand.range else { fallbackNavigateAndReplace(cand); return }
 
             if finalRange.location + finalRange.length > ns.length ||
                ns.substring(with: finalRange) != cand.original {
-                // Re-locate by context near old index
-                let windowStart = max(0, Int(cr.location) - 128)
-                let windowEnd   = min(ns.length, Int(cr.location + cr.length) + 128)
+                let windowStart = max(0, finalRange.location - 128)
+                let windowEnd   = min(ns.length, finalRange.location + finalRange.length + 128)
                 let window = NSRange(location: windowStart, length: max(0, windowEnd - windowStart))
                 let needle = cand.before + cand.original + cand.after
                 var found = ns.range(of: needle, options: [], range: window)
@@ -744,53 +738,13 @@ final class AppCoordinator: NSObject {
                 }
             }
 
-            // Replace via setValue on whole string (works in many fields)
-            if axSetSelectedRange(el, finalRange) {
-                full = axStringValue(el) ?? full
-                let ns2 = full as NSString
-                let newText = ns2.replacingCharacters(in: finalRange, with: cand.converted)
-
-                isSynthesizing = true
-                let ok = axSetStringValue(el, newText)
-                // Restore caret:
-                let originalLen = finalRange.length
-                let convertedLen = (cand.converted as NSString).length
-                let delta = convertedLen - originalLen
-                let afterWordIndex = finalRange.location + finalRange.length
-
-                let newCaret: Int
-                if caretBefore.location >= afterWordIndex {
-                    newCaret = caretBefore.location + delta
-                } else if caretBefore.location >= finalRange.location && caretBefore.location <= afterWordIndex {
-                    let insideOffset = caretBefore.location - finalRange.location
-                    newCaret = finalRange.location + min(insideOffset, convertedLen)
-                } else {
-                    newCaret = caretBefore.location
-                }
-                _ = axSetSelectedRange(el, NSRange(location: max(0, newCaret), length: 0))
-                isSynthesizing = false
-
-                if !ok {
-                    fallbackTypeOverSelection(el: el, text: cand.converted, restoreCaretTo: newCaret)
-                } else {
-            playSwitchSound(); menuBar.updateStatusTitleAndColor()
-                }
+            if axClient.replace(el, in: finalRange, with: cand.converted) {
+                playSwitchSound(); menuBar.updateStatusTitleAndColor()
                 return
             }
         }
 
-        // AX path failed → keystroke fallback
         fallbackNavigateAndReplace(cand)
-    }
-
-    private func fallbackTypeOverSelection(el: AXUIElement, text: String, restoreCaretTo pos: Int) {
-        dlog("[FALLBACK typeover] start synth=\(isSynthesizing) curID=\(layoutManager.currentInputSourceID()) buffer=\(wordParser.buffer)")
-        isSynthesizing = true
-        typeUnicode(text)
-        _ = axSetSelectedRange(el, NSRange(location: max(0, pos), length: 0))
-        isSynthesizing = false
-        dlog("[FALLBACK typeover] end synth=\(isSynthesizing) curID=\(layoutManager.currentInputSourceID()) buffer=\(wordParser.buffer)")
-        playSwitchSound(); menuBar.updateStatusTitleAndColor()
     }
 
     private func fallbackNavigateAndReplace(_ cand: AmbiguousCandidate) {
@@ -883,7 +837,7 @@ extension AppCoordinator {
     /// Seed an ambiguity candidate for tests.
     func testPushAmbiguity(original: String, converted: String, targetLangPrefix: String, wordsAhead: Int) {
         let cand = AmbiguousCandidate(
-            element: nil, pid: 0, range: nil,
+            element: nil, range: nil,
             original: original, converted: converted,
             before: "", after: "",
             when: CFAbsoluteTimeGetCurrent(),
@@ -900,18 +854,14 @@ extension AppCoordinator {
 
     /// Apply the most recent ambiguity synchronously for deterministic tests.
     func testApplyMostRecentAmbiguitySynchronously() {
-        guard !ambiguityStack.isEmpty else { return }
-        let cand = ambiguityStack.removeLast()
-        if isRunningUnitTests {
-            _ = testSimulateAmbiguityOnTestText(cand)
-            return
-        }
-        if testSimulationMode {
-            _ = testSimulateAmbiguityOnTestText(cand)
-            return
-        }
-        // Fallback to normal path
-        fallbackNavigateAndReplace(cand)
+        applyMostRecentAmbiguityAndRestoreCaret()
+    }
+
+    func enableAXForTests(_ fake: AXClient) { self.axClient = fake }
+
+    func simulateWordBoundaryAfterTyping(_ word: String) {
+        let converted = convert(word, from: "en", to: "uk")
+        captureAmbiguity(original: word, converted: converted, targetLangPrefix: "uk")
     }
 }
 
