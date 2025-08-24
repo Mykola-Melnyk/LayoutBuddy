@@ -384,7 +384,7 @@ final class AppCoordinator: NSObject {
 
     private func replaceLastWord(with newWord: String,
                                  targetLangPrefix: String,
-                                 keepFollowingBoundary: Bool,
+                                  keepFollowingBoundary: Bool,
                                  boundaryEvent: CGEvent? = nil,
                                  deleteCountOverride: Int? = nil) {
         let deleteCount = deleteCountOverride ?? wordParser.buffer.count
