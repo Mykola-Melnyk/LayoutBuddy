@@ -295,7 +295,17 @@ final class AppCoordinator: NSObject {
         dlog("[PROC] entry buffer=\(wordParser.buffer)")
 
         let curID = layoutManager.currentInputSourceID()
-        let curLangPrefix = isLayoutUkrainian(curID) ? "uk" : "en"
+        let curLangPrefix: String
+        if (isRunningUnitTests || testSimulationMode) {
+            if let first = wordParser.buffer.unicodeScalars.first,
+               wordParser.isCyrillicLetter(first) {
+                curLangPrefix = "uk"
+            } else {
+                curLangPrefix = "en"
+            }
+        } else {
+            curLangPrefix = isLayoutUkrainian(curID) ? "uk" : "en"
+        }
         let otherLangPrefix = (curLangPrefix == "en") ? "uk" : "en"
 
         let (core, _) = wordParser.splitTrailingMapped(wordParser.buffer)
