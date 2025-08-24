@@ -342,7 +342,14 @@ final class AppCoordinator: NSObject {
             let replaced = processBufferedWordIfNeeded(boundaryEvent: eventCopy)
             dlog("[KEY] boundary after process buffer=\(wordParser.buffer)")
             bumpWordsAhead()
-            if !replaced { eventCopy?.post(tap: .cgAnnotatedSessionEventTap) }
+            if !replaced {
+                if isRunningUnitTests || testSimulationMode {
+                    return Unmanaged.passUnretained(event)
+                } else {
+                    eventCopy?.post(tap: .cgAnnotatedSessionEventTap)
+                    return nil
+                }
+            }
             return nil
         }
 
