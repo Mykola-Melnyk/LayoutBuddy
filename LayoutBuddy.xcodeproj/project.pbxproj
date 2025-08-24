@@ -15,7 +15,6 @@
 		7A9CB5D92E5B2755003A1C37 /* RefactorCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5D22E5B2755003A1C37 /* RefactorCoordinator.swift */; };
 		7A9CB5DA2E5B2755003A1C37 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5BB2E5B2755003A1C37 /* Models.swift */; };
 		7A9CB5DB2E5B2755003A1C37 /* EventTapInputMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5C32E5B2755003A1C37 /* EventTapInputMonitor.swift */; };
-		7A9CB5DC2E5B2755003A1C37 /* AppCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5D02E5B2755003A1C37 /* AppCoordinator.swift */; };
 		7A9CB5DD2E5B2755003A1C37 /* LayoutMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5C62E5B2755003A1C37 /* LayoutMapper.swift */; };
 		7A9CB5DE2E5B2755003A1C37 /* WordBoundaries.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5BC2E5B2755003A1C37 /* WordBoundaries.swift */; };
 		7A9CB5DF2E5B2755003A1C37 /* Permissions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5CC2E5B2755003A1C37 /* Permissions.swift */; };
@@ -27,6 +26,7 @@
 		7A9CB5E52E5B2755003A1C37 /* InputMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5CA2E5B2755003A1C37 /* InputMonitor.swift */; };
 		7A9CB5E62E5B2755003A1C37 /* ReplacementPerformer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5CD2E5B2755003A1C37 /* ReplacementPerformer.swift */; };
 		7A9CB5E72E5B2755003A1C37 /* AXReplacementPerformer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5BF2E5B2755003A1C37 /* AXReplacementPerformer.swift */; };
+		7A9CB5E92E5B2DDC003A1C37 /* KeyEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9CB5E82E5B2DD6003A1C37 /* KeyEvent.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -67,9 +67,9 @@
 		7A9CB5CC2E5B2755003A1C37 /* Permissions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Permissions.swift; sourceTree = "<group>"; };
 		7A9CB5CD2E5B2755003A1C37 /* ReplacementPerformer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplacementPerformer.swift; sourceTree = "<group>"; };
 		7A9CB5CE2E5B2755003A1C37 /* TextCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextCapture.swift; sourceTree = "<group>"; };
-		7A9CB5D02E5B2755003A1C37 /* AppCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppCoordinator.swift; sourceTree = "<group>"; };
 		7A9CB5D12E5B2755003A1C37 /* AppMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppMode.swift; sourceTree = "<group>"; };
 		7A9CB5D22E5B2755003A1C37 /* RefactorCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RefactorCoordinator.swift; sourceTree = "<group>"; };
+		7A9CB5E82E5B2DD6003A1C37 /* KeyEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyEvent.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -139,6 +139,7 @@
 		7A9CB5BD2E5B2755003A1C37 /* Domain */ = {
 			isa = PBXGroup;
 			children = (
+				7A9CB5E82E5B2DD6003A1C37 /* KeyEvent.swift */,
 				7A9CB5BB2E5B2755003A1C37 /* Models.swift */,
 				7A9CB5BC2E5B2755003A1C37 /* WordBoundaries.swift */,
 			);
@@ -188,7 +189,6 @@
 				7A9CB5C52E5B2755003A1C37 /* Impl */,
 				7A9CB5C82E5B2755003A1C37 /* Resolver */,
 				7A9CB5CF2E5B2755003A1C37 /* Services */,
-				7A9CB5D02E5B2755003A1C37 /* AppCoordinator.swift */,
 				7A9CB5D12E5B2755003A1C37 /* AppMode.swift */,
 				7A9CB5D22E5B2755003A1C37 /* RefactorCoordinator.swift */,
 			);
@@ -339,6 +339,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7A9CB5E92E5B2DDC003A1C37 /* KeyEvent.swift in Sources */,
 				7A9CB5D42E5B2755003A1C37 /* PopoverAmbiguityPresenter.swift in Sources */,
 				7A9CB5D52E5B2755003A1C37 /* MenuBarUI.swift in Sources */,
 				7A9CB5D62E5B2755003A1C37 /* AmbiguityPresenter.swift in Sources */,
@@ -347,7 +348,6 @@
 				7A9CB5D92E5B2755003A1C37 /* RefactorCoordinator.swift in Sources */,
 				7A9CB5DA2E5B2755003A1C37 /* Models.swift in Sources */,
 				7A9CB5DB2E5B2755003A1C37 /* EventTapInputMonitor.swift in Sources */,
-				7A9CB5DC2E5B2755003A1C37 /* AppCoordinator.swift in Sources */,
 				7A9CB5DD2E5B2755003A1C37 /* LayoutMapper.swift in Sources */,
 				7A9CB5DE2E5B2755003A1C37 /* WordBoundaries.swift in Sources */,
 				7A9CB5DF2E5B2755003A1C37 /* Permissions.swift in Sources */,

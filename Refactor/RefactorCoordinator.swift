@@ -30,10 +30,17 @@ final class RefactorCoordinator {
 
     func start() {
         input.start { [weak self] event in
-            guard let self else { return }
-            self.handleKeyEvent(event)
+            self?.handleKeyEvent(event)
         }
     }
+
+
+    
+    func stop() {
+        input.stop()
+    }
+
+
 
     private func handleKeyEvent(_ event: KeyEvent) {
         // Trigger conversion on any event; refine to hotkey if needed

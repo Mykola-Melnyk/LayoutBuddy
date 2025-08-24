@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 
 @MainActor
 final class AXReplacementPerformer: ReplacementPerformer {

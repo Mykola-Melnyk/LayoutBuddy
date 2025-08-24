@@ -1,9 +1,5 @@
 import AppKit
 
-struct KeyEvent {
-    let type: CGEventType
-    let cgEvent: CGEvent
-}
 
 final class EventTapInputMonitor: InputMonitor {
     private var tap: CFMachPort?

@@ -1,18 +1,21 @@
 import Cocoa
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-
-    private let preferences = LayoutPreferences()
-    private var coordinator: AppCoordinator?
+    private var coordinator: RefactorCoordinator?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let coordinator = AppCoordinator(preferences: preferences)
-        self.coordinator = coordinator
-        coordinator.start()
+        coordinator = RefactorCoordinator(
+            input: EventTapInputMonitor(),
+            capture: AXTextCapture(),
+            resolver: LayoutMapper(),
+            replace: AXReplacementPerformer(),
+            ui: PopoverAmbiguityPresenter(),
+            perms: AXPermissions()
+        )
+        coordinator?.start()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         coordinator?.stop()
     }
 }
-

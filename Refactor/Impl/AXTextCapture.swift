@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 
 @MainActor
 final class AXTextCapture: TextCapture {
@@ -7,30 +8,34 @@ final class AXTextCapture: TextCapture {
     func captureWord(at anchor: CaretAnchor) async throws -> TextContext {
         // Get the system-wide accessibility object
         let system = AXUIElementCreateSystemWide()
-        var focused: AnyObject?
-        let errFocus = AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused)
-        guard errFocus == .success, let element = focused as? AXUIElement else {
-            throw TextCaptureError.noFocusedElement
-        }
+        var focused: CFTypeRef?
+        AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused)
+        guard let element = (focused as! AXUIElement?) else { throw TextCaptureError.noFocusedElement }
+
 
         // Ensure element is editable, if attribute exists
-        var editableValue: AnyObject?
-        if AXUIElementCopyAttributeValue(element, kAXEditableAttribute as CFString, &editableValue) == .success {
-            if let isEditable = editableValue as? Bool, !isEditable {
-                throw TextCaptureError.notEditable
-            }
-        }
+        var valueObj: CFTypeRef?
+        let hasValue = AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueObj) == .success
+        guard hasValue else { throw TextCaptureError.cannotReadText }
+
 
         // Get selected text range in UTF16 (CFRange)
-        var selectedRangeValue: AnyObject?
-        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &selectedRangeValue) == .success,
-              let axRange = selectedRangeValue as? AXValue,
-              AXValueGetType(axRange) == .cfRange else {
+        var selectedRangeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element,
+                                            kAXSelectedTextRangeAttribute as CFString,
+                                            &selectedRangeValue) == .success else {
             throw TextCaptureError.noSelection
         }
+
+        let axRange = selectedRangeValue as! AXValue
+        guard AXValueGetType(axRange) == .cfRange else {
+            throw TextCaptureError.noSelection
+        }
+
         var cfRange = CFRange()
         AXValueGetValue(axRange, .cfRange, &cfRange)
         let caretUTF16 = cfRange.location
+
 
         // Obtain full text
         var fullTextValue: AnyObject?
