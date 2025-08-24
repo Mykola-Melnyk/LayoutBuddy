@@ -24,6 +24,11 @@ struct LayoutBuddyTests {
             let app = AppCoordinator()
             #expect(app.convert("ghbdsn", from: "en", to: "uk") == "привіт")
         }
+    
+    @Test func testEnglishWithCommaAndRealWordInputProducesUkrainianOutput() throws {
+            let app = AppCoordinator()
+            #expect(app.convert(",elm", from: "en", to: "uk") == "будь")
+        }
 
     @Test func testUkrainianInputProducesEnglishOutput() throws {
             let app = AppCoordinator()
