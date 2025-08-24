@@ -868,15 +868,49 @@ extension AppCoordinator {
     }
     private static var _testDocumentText: String = ""
 
-    // Simulate applying the ambiguity to the test text (words separated by spaces).
+    // Unicode-aware helper returning the range of the last word in `text`.
+    // Supports Unicode letters including Cyrillic.
+    private func lastWordRange(in text: some StringProtocol) -> Range<String.Index>? {
+        guard !text.isEmpty else { return nil }
+        let letters = CharacterSet.letters
+
+        var end = text.endIndex
+        var start = end
+
+        // walk left skipping non-letters
+        while start > text.startIndex {
+            let p = text.index(before: start)
+            if text[p].unicodeScalars.allSatisfy({ letters.contains($0) }) {
+                break
+            }
+            start = p
+        }
+        end = start
+
+        // walk left across letters
+        while start > text.startIndex {
+            let p = text.index(before: start)
+            if text[p].unicodeScalars.allSatisfy({ letters.contains($0) }) {
+                start = p
+            } else {
+                break
+            }
+        }
+
+        return start < end ? start..<end : nil
+    }
+
+    // Simulate applying the ambiguity to the test text using Unicode-aware word bounds.
     private func testSimulateAmbiguityOnTestText(_ cand: AmbiguousCandidate) -> Bool {
-        var parts = testDocumentText.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
-        guard !parts.isEmpty else { return false }
-        let idx = max(0, parts.count - 1 - cand.wordsAhead)
-        guard idx < parts.count else { return false }
-        if parts[idx] == cand.original { parts[idx] = cand.converted }
-        else { parts[idx] = cand.converted }
-        testDocumentText = parts.joined(separator: " ")
+        var searchEnd = testDocumentText.endIndex
+        var targetRange: Range<String.Index>? = nil
+        for _ in 0...cand.wordsAhead {
+            guard let r = lastWordRange(in: testDocumentText[..<searchEnd]) else { return false }
+            targetRange = r
+            searchEnd = r.lowerBound
+        }
+        guard let range = targetRange else { return false }
+        testDocumentText.replaceSubrange(range, with: cand.converted)
         return true
     }
 
