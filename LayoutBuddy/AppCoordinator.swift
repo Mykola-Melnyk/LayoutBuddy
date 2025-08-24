@@ -10,10 +10,10 @@ private let lbLetters = CharacterSet.letters
 private extension CGEvent {
     /// Returns the first unicode scalar from this keyboard event, if any.
     var firstUnicodeScalar: UnicodeScalar? {
-        var length: UniCharCount = 0
+        var length: Int = 0
         self.keyboardGetUnicodeString(maxStringLength: 0, actualStringLength: &length, unicodeString: nil)
         guard length > 0 else { return nil }
-        var buffer = [UniChar](repeating: 0, count: Int(length))
+        var buffer = [UniChar](repeating: 0, count: length)
         self.keyboardGetUnicodeString(maxStringLength: length, actualStringLength: &length, unicodeString: &buffer)
         if let u = buffer.first { return UnicodeScalar(u) }
         return nil
