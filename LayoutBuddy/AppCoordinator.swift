@@ -56,6 +56,13 @@ final class AppCoordinator: NSObject {
     // When running unit tests, avoid posting real keyboard events to the session.
     private let isRunningUnitTests: Bool = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
+    // Simulation support for unit tests
+    private static var _testSimulationMode = false
+    private var testSimulationMode: Bool { AppCoordinator._testSimulationMode }
+
+    // Captured document text during tests
+    var testDocumentText: String = ""
+
     // Word tracking
     private var wordParser = WordParser()
     private var inEmail = false
@@ -233,7 +240,7 @@ final class AppCoordinator: NSObject {
                 dlog("[KEY] script decision firstLatin=\(firstIsLatin) newLatin=\(newIsLatin) buffer=\(wordParser.buffer)")
                 if firstIsLatin != newIsLatin {
                     dlog("[KEY] script mismatch before process buffer=\(wordParser.buffer) scalar=\(scalar)")
-                    processBufferedWordIfNeeded()
+                    _ = processBufferedWordIfNeeded()
                     dlog("[KEY] script mismatch after process buffer=\(wordParser.buffer)")
                     bumpWordsAhead()
                 }
@@ -894,11 +901,6 @@ extension AppCoordinator {
 
     // Enable deterministic simulation mode for unit tests (no CGEvents posted).
     func testSetSimulationMode(_ on: Bool) { AppCoordinator._testSimulationMode = on }
-    private var testSimulationMode: Bool { AppCoordinator._testSimulationMode }
-    private static var _testSimulationMode: Bool = false
-
-    // A simple test buffer holding the full text for unit tests.
-    var testDocumentText: String = ""
 
     // Unicode-aware helper returning the range of the last word in `text`.
     // Supports Unicode letters including Cyrillic.
