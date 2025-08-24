@@ -243,8 +243,8 @@ final class AppCoordinator: NSObject {
         }
         guard event.type == .keyDown else { return Unmanaged.passUnretained(event) }
 
-        let nsFlags = NSEvent.ModifierFlags(rawValue: event.flags.rawValue)
-        let filtered = nsFlags.intersection([.command, .control, .option, .shift])
+        let nsFlags = NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue))
+        let filtered: NSEvent.ModifierFlags = nsFlags.intersection([.command, .control, .option, .shift])
         let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
         let hasCmd  = filtered.contains(.command)
         let hasCtrl = filtered.contains(.control)
