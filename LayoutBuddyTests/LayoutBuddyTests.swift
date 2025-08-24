@@ -21,6 +21,10 @@ import Foundation
 @Suite(.serialized)
 @MainActor
 struct LayoutBuddyTests {
+
+    init() {
+        AppCoordinator().testSetSimulationMode(true)
+    }
     
     @Test func testEnglishInputProducesUkrainianOutput() throws {
             let app = AppCoordinator()

@@ -255,7 +255,7 @@ final class AppCoordinator: NSObject {
 
         let toggleHK = preferences.toggleHotkey
         if keyCode == toggleHK.keyCode && filtered == toggleHK.modifiers {
-            if isRunningUnitTests {
+            if isRunningUnitTests || testSimulationMode {
                 toggleConversion()
             } else {
                 DispatchQueue.main.async { self.toggleConversion() }
@@ -267,7 +267,11 @@ final class AppCoordinator: NSObject {
         if keyCode == convertHK.keyCode && filtered == convertHK.modifiers {
             dlog("[HOTKEY] pressed — stack=\(ambiguityStack.count)")
             if !ambiguityStack.isEmpty {
-                DispatchQueue.main.async { self.applyMostRecentAmbiguityAndRestoreCaret() }
+                if isRunningUnitTests || testSimulationMode {
+                    applyMostRecentAmbiguityAndRestoreCaret()
+                } else {
+                    DispatchQueue.main.async { self.applyMostRecentAmbiguityAndRestoreCaret() }
+                }
             } else {
                 NSSound.beep()
             }
