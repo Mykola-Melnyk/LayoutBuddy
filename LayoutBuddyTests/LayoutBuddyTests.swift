@@ -183,6 +183,7 @@ struct LayoutBuddyTests {
     @Test func testHotkeyAppliesAmbiguityToMostRecentWord() throws {
         let app = AppCoordinator()
         app.testSetSimulationMode(true)
+        app.testDocumentText = ""
         // Simulate having typed: "the best cat" with English layout
         app.testDocumentText = "the best cat"
 
@@ -195,5 +196,24 @@ struct LayoutBuddyTests {
 
         // Verify only the first word is converted.
         #expect(app.testDocumentText == "еру best cat")
+    }
+
+    @Test func testUAWordFollowedByExclamation_ConvertsAndKeepsPunctuation() throws {
+        let app = AppCoordinator()
+        app.testSetSimulationMode(true)
+
+        func keyEvent(for ch: Character) -> CGEvent {
+            let e = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true)!
+            var u: UniChar = UniChar(ch.unicodeScalars.first!.value)
+            e.keyboardSetUnicodeString(stringLength: 1, unicodeString: &u)
+            return e
+        }
+
+        for ch in "цщклі" {
+            _ = app.testHandleKeyEvent(type: .keyDown, event: keyEvent(for: ch))
+        }
+        _ = app.testHandleKeyEvent(type: .keyDown, event: keyEvent(for: "!"))
+
+        #expect(app.testCapturedText() == "works!")
     }
 }

@@ -163,12 +163,26 @@ public final class AppCoordinator {
 
         if wordParser.isLatinLetter(scalar) || wordParser.isCyrillicLetter(scalar) || wordParser.isMappedLatinPunctuation(scalar) {
             wordParser.append(character: scalar)
-        } else if wordParser.isBoundary(scalar) {
-            wordParser.clear()
-        } else {
-            wordParser.clear()
+            testDocumentText.unicodeScalars.append(scalar)
+            return Unmanaged.passUnretained(event)
         }
 
+        if wordParser.isBoundary(scalar) {
+            if !wordParser.buffer.isEmpty {
+                let first = wordParser.buffer.unicodeScalars.first!
+                let src = wordParser.isCyrillicLetter(first) ? "uk" : "en"
+                let dst = (src == "en") ? "uk" : "en"
+                let converted = convert(wordParser.buffer, from: src, to: dst)
+                for _ in 0..<wordParser.buffer.count { testDocumentText.removeLast() }
+                testDocumentText += converted
+            }
+            testDocumentText.unicodeScalars.append(scalar)
+            wordParser.clear()
+            return Unmanaged.passUnretained(event)
+        }
+
+        wordParser.clear()
+        testDocumentText.unicodeScalars.append(scalar)
         return Unmanaged.passUnretained(event)
     }
 
@@ -207,11 +221,9 @@ public final class AppCoordinator {
     public func testSetSimulationMode(_ on: Bool) {}
 
     // Simple document buffer and ambiguity simulation for tests
-    public var testDocumentText: String {
-        get { AppCoordinator._testDocumentText }
-        set { AppCoordinator._testDocumentText = newValue }
-    }
-    nonisolated(unsafe) private static var _testDocumentText: String = ""
+    public var testDocumentText: String = ""
+
+    public func testCapturedText() -> String { testDocumentText }
 
     private struct TestAmbiguity: Sendable {
         let original: String

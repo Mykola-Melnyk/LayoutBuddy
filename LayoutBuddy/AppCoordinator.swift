@@ -371,6 +371,16 @@ final class AppCoordinator: NSObject {
                                  boundaryEvent: CGEvent? = nil,
                                  deleteCountOverride: Int? = nil) {
         let deleteCount = deleteCountOverride ?? wordParser.buffer.count
+        #if DEBUG
+        if isRunningUnitTests || testSimulationMode {
+            for _ in 0..<deleteCount { testDocumentText.removeLast() }
+            testDocumentText += newWord
+            if let s = boundaryEvent?.firstUnicodeScalar {
+                testDocumentText.unicodeScalars.append(s)
+            }
+            return
+        }
+        #endif
 
         DispatchQueue.main.async {
             let curID = self.layoutManager.currentInputSourceID()
@@ -888,11 +898,7 @@ extension AppCoordinator {
     private static var _testSimulationMode: Bool = false
 
     // A simple test buffer holding the full text for unit tests.
-    var testDocumentText: String {
-        get { AppCoordinator._testDocumentText }
-        set { AppCoordinator._testDocumentText = newValue }
-    }
-    private static var _testDocumentText: String = ""
+    var testDocumentText: String = ""
 
     // Unicode-aware helper returning the range of the last word in `text`.
     // Supports Unicode letters including Cyrillic.
@@ -973,6 +979,8 @@ extension AppCoordinator {
         // Fallback to normal path
         fallbackNavigateAndReplace(cand)
     }
+
+    func testCapturedText() -> String { testDocumentText }
 }
 
 // MARK: - EventTapControllerDelegate
