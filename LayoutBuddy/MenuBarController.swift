@@ -9,6 +9,7 @@ final class MenuBarController: NSObject {
     var onSetAsSecondary: ((String) -> Void)?
     var onQuit: (() -> Void)?
     var onToggleConversion: (() -> Void)?
+    var onOpenSettings: (() -> Void)?
 
     private var menu: NSMenu?
     private var isConversionOn = true
@@ -84,6 +85,11 @@ final class MenuBarController: NSObject {
             toggleItem.target = self
             menu.addItem(toggleItem)
 
+            let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
+            settingsItem.keyEquivalentModifierMask = [.command]
+            settingsItem.target = self
+            menu.addItem(settingsItem)
+
             let quitItem = NSMenuItem(title: "Quit LayoutBuddy", action: #selector(quit), keyEquivalent: "q")
             quitItem.target = self
             menu.addItem(quitItem)
@@ -116,6 +122,10 @@ final class MenuBarController: NSObject {
 
     @objc private func toggleConversionMenu() {
         onToggleConversion?()
+    }
+
+    @objc private func openSettings() {
+        onOpenSettings?()
     }
 
     @objc private func statusItemClicked(_ sender: Any?) {

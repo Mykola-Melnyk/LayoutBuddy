@@ -2,7 +2,7 @@ import Cocoa
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
-    private let preferences = LayoutPreferences()
+    let preferences = LayoutPreferences()
     private var coordinator: AppCoordinator?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
