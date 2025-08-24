@@ -14,7 +14,7 @@ struct LayoutBuddyApp: App {
 
     var body: some Scene {
         Settings {
-            SettingsView(preferences: appDelegate.preferences)
+            SettingsView()
         }
     }
 }

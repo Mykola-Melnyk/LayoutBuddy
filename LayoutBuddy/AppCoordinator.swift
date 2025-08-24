@@ -156,7 +156,7 @@ final class AppCoordinator: NSObject {
                 return
             }
 
-            let controller = NSHostingController(rootView: SettingsView(preferences: preferences))
+            let controller = NSHostingController(rootView: SettingsView())
             let window = NSWindow(contentViewController: controller)
             window.title = "Settings"
             window.center()
