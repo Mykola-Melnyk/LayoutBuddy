@@ -571,6 +571,21 @@ final class AppCoordinator: NSObject {
         return nil
     }
 
+    private func axStringForRange(_ el: AXUIElement, _ range: CFRange) -> String? {
+        var r = range
+        guard let param = AXValueCreate(.cfRange, &r) else { return nil }
+        var ref: CFTypeRef?
+        if AXUIElementCopyParameterizedAttributeValue(
+            el,
+            kAXStringForRangeParameterizedAttribute as CFString,
+            param,
+            &ref
+        ) == .success, let s = ref as? String {
+            return s
+        }
+        return nil
+    }
+
     private func axSetSelectedRange(_ el: AXUIElement, _ range: NSRange) -> Bool {
         var cfr = CFRange(location: range.location, length: range.length)
         guard let v = AXValueCreate(.cfRange, &cfr) else { return false }
@@ -598,52 +613,91 @@ final class AppCoordinator: NSObject {
     }
 
     // Save tie slightly after boundary so target app updates selection
-    private func captureAmbiguityLater(original: String, converted: String, targetLangPrefix: String) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
-            self.captureAmbiguity(original: original, converted: converted, targetLangPrefix: targetLangPrefix)
+    private func captureAmbiguityLater(original: String,
+                                       converted: String,
+                                       targetLangPrefix: String,
+                                       delay: Double = 0.05) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            if self.isSynthesizing {
+                self.captureAmbiguityLater(original: original,
+                                           converted: converted,
+                                           targetLangPrefix: targetLangPrefix,
+                                           delay: delay)
+            } else {
+                self.captureAmbiguity(original: original,
+                                      converted: converted,
+                                      targetLangPrefix: targetLangPrefix)
+            }
         }
     }
 
     private func captureAmbiguity(original: String, converted: String, targetLangPrefix: String) {
-        // Try AX path first
-        if let el = axFocusedElement(),
-           let caret = axSelectedRange(el),
-           let full = axStringValue(el) {
-
-            let ns = full as NSString
+        if let el = axFocusedElement(), let caret = axSelectedRange(el) {
             let coreLen = (original as NSString).length
-            let searchStart = max(0, caret.location - coreLen - 64)
-            let window = NSRange(location: searchStart, length: max(0, caret.location - searchStart))
-            let found = ns.range(of: original, options: [.backwards], range: window)
-            guard found.location != NSNotFound else {
-                // Could not locate string by AX → fall back to blind capture
-                pushBlindAmbiguity(original: original, converted: converted, targetLangPrefix: targetLangPrefix)
-                return
+            if caret.location >= coreLen {
+                let wordStart = caret.location - coreLen
+                let wordRange = CFRange(location: wordStart, length: coreLen)
+                if let word = axStringForRange(el, wordRange), word == original {
+                    let beforeStart = max(0, wordStart - contextRadius)
+                    let beforeRange = CFRange(location: beforeStart, length: wordStart - beforeStart)
+                    let afterRange = CFRange(location: caret.location, length: contextRadius)
+                    let before = axStringForRange(el, beforeRange) ?? ""
+                    let after = axStringForRange(el, afterRange) ?? ""
+
+                    let cand = AmbiguousCandidate(
+                        element: el,
+                        pid: axPID(el),
+                        range: wordRange,
+                        original: original,
+                        converted: converted,
+                        before: before,
+                        after: after,
+                        when: CFAbsoluteTimeGetCurrent(),
+                        targetLangPrefix: targetLangPrefix,
+                        keystrokeOnly: false,
+                        wordsAhead: 0
+                    )
+                    ambiguityStack.append(cand)
+                    if ambiguityStack.count > ambiguityMax { _ = ambiguityStack.removeFirst() }
+                    dlog("[TIE] saved: “\(original)” → “\(converted)” — stack=\(ambiguityStack.count)")
+                    return
+                }
+
+                // Fallback to older full-string search
+                if let full = axStringValue(el) {
+                    let ns = full as NSString
+                    let searchStart = max(0, caret.location - coreLen - 64)
+                    let window = NSRange(location: searchStart, length: max(0, caret.location - searchStart))
+                    let found = ns.range(of: original, options: [.backwards], range: window)
+                    if found.location != NSNotFound {
+                        let beforeLen = min(contextRadius, found.location)
+                        let afterStart = found.location + found.length
+                        let afterLen = min(contextRadius, ns.length - afterStart)
+                        let before = ns.substring(with: NSRange(location: found.location - beforeLen, length: beforeLen))
+                        let after  = ns.substring(with: NSRange(location: afterStart, length: afterLen))
+
+                        let cand = AmbiguousCandidate(
+                            element: el,
+                            pid: axPID(el),
+                            range: CFRange(location: found.location, length: found.length),
+                            original: original,
+                            converted: converted,
+                            before: before,
+                            after: after,
+                            when: CFAbsoluteTimeGetCurrent(),
+                            targetLangPrefix: targetLangPrefix,
+                            keystrokeOnly: false,
+                            wordsAhead: 0
+                        )
+                        ambiguityStack.append(cand)
+                        if ambiguityStack.count > ambiguityMax { _ = ambiguityStack.removeFirst() }
+                        dlog("[TIE] saved: “\(original)” → “\(converted)” — stack=\(ambiguityStack.count)")
+                        return
+                    }
+                }
             }
-
-            let beforeLen = min(contextRadius, found.location)
-            let afterStart = found.location + found.length
-            let afterLen = min(contextRadius, ns.length - afterStart)
-            let before = ns.substring(with: NSRange(location: found.location - beforeLen, length: beforeLen))
-            let after  = ns.substring(with: NSRange(location: afterStart, length: afterLen))
-
-            let cand = AmbiguousCandidate(
-                element: el,
-                pid: axPID(el),
-                range: CFRange(location: found.location, length: found.length),
-                original: original, converted: converted,
-                before: before, after: after,
-                when: CFAbsoluteTimeGetCurrent(),
-                targetLangPrefix: targetLangPrefix,
-                keystrokeOnly: false, wordsAhead: 0
-            )
-            ambiguityStack.append(cand)
-            if ambiguityStack.count > ambiguityMax { _ = ambiguityStack.removeFirst() }
-            dlog("[TIE] saved: “\(original)” → “\(converted)” — stack=\(ambiguityStack.count)")
-            return
         }
 
-        // AX failed → blind candidate
         pushBlindAmbiguity(original: original, converted: converted, targetLangPrefix: targetLangPrefix)
     }
 
@@ -774,16 +828,13 @@ final class AppCoordinator: NSObject {
             }
         }
     }
-#if DEBUG
     // MARK: - Testing helpers
     /// Expose the internal word buffer for unit tests.
     func test_setWordBuffer(_ text: String) { wordParser.test_setBuffer(text) }
     func test_getWordBuffer() -> String { wordParser.test_getBuffer() }
 
-#endif
 }
 
-#if DEBUG
 extension AppCoordinator {
     /// Exposes the internal word buffer for testing.
     var testWordBuffer: String {
@@ -863,7 +914,6 @@ extension AppCoordinator {
         fallbackNavigateAndReplace(cand)
     }
 }
-#endif
 
 // MARK: - EventTapControllerDelegate
 extension AppCoordinator: EventTapControllerDelegate {

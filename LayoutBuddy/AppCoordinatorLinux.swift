@@ -24,7 +24,7 @@ public struct CGEventField: RawRepresentable, Sendable {
 public typealias UniChar = UInt16
 public typealias CGKeyCode = UInt16
 
-public class CGEvent {
+public class CGEvent: @unchecked Sendable {
     public var type: CGEventType
     public var flags: CGEventFlags = []
     private var unicode: [UniChar] = []
@@ -201,6 +201,38 @@ public final class AppCoordinator {
     public func testQueuedEventsCount() -> Int {
         queuedEventsLock.lock(); defer { queuedEventsLock.unlock() }
         return queuedEvents.count
+    }
+
+    // No-op in Linux stub but kept for parity with macOS implementation
+    public func testSetSimulationMode(_ on: Bool) {}
+
+    // Simple document buffer and ambiguity simulation for tests
+    public var testDocumentText: String {
+        get { AppCoordinator._testDocumentText }
+        set { AppCoordinator._testDocumentText = newValue }
+    }
+    nonisolated(unsafe) private static var _testDocumentText: String = ""
+
+    private struct TestAmbiguity: Sendable {
+        let original: String
+        let converted: String
+        let wordsAhead: Int
+    }
+    private var pendingAmbiguity: TestAmbiguity?
+
+    public func testPushAmbiguity(original: String, converted: String, targetLangPrefix: String, wordsAhead: Int) {
+        pendingAmbiguity = TestAmbiguity(original: original, converted: converted, wordsAhead: wordsAhead)
+    }
+
+    public func testApplyMostRecentAmbiguitySynchronously() {
+        guard let amb = pendingAmbiguity else { return }
+        var parts = testDocumentText.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
+        let idx = max(0, parts.count - 1 - amb.wordsAhead)
+        if idx < parts.count {
+            parts[idx] = amb.converted
+        }
+        testDocumentText = parts.joined(separator: " ")
+        pendingAmbiguity = nil
     }
 }
 #endif
