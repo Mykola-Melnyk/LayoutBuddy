@@ -13,7 +13,8 @@ struct LayoutBuddyApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        // No main window; just a placeholder Settings scene.
-        Settings { EmptyView() }
+        Settings {
+            SettingsView(preferences: appDelegate.preferences)
+        }
     }
 }

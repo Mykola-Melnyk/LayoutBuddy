@@ -84,6 +84,11 @@ final class MenuBarController: NSObject {
             toggleItem.target = self
             menu.addItem(toggleItem)
 
+            let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
+            settingsItem.keyEquivalentModifierMask = [.command]
+            settingsItem.target = self
+            menu.addItem(settingsItem)
+
             let quitItem = NSMenuItem(title: "Quit LayoutBuddy", action: #selector(quit), keyEquivalent: "q")
             quitItem.target = self
             menu.addItem(quitItem)
@@ -116,6 +121,17 @@ final class MenuBarController: NSObject {
 
     @objc private func toggleConversionMenu() {
         onToggleConversion?()
+    }
+
+    @objc private func openSettings() {
+        let action = Selector(("showSettingsWindow:"))
+        if Thread.isMainThread {
+            NSApp.sendAction(action, to: nil, from: nil)
+        } else {
+            DispatchQueue.main.async {
+                NSApp.sendAction(action, to: nil, from: nil)
+            }
+        }
     }
 
     @objc private func statusItemClicked(_ sender: Any?) {

@@ -23,6 +23,7 @@ let package = Package(
                 "EventTapController.swift",
                 "KeyboardLayoutManager.swift",
                 "LayoutBuddyApp.swift",
+                "SettingsView.swift",
                 "MenuBarController.swift",
                 "LayoutPreferences.swift",
                 "LayoutBuddy.entitlements",
