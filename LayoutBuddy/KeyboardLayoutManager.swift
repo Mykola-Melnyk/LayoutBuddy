@@ -2,10 +2,10 @@ import Cocoa
 import Carbon
 
 /// Provides access to keyboard input sources and layout switching.
-final class KeyboardLayoutManager {
-    private let preferences: LayoutPreferences
+final class KeyboardLayoutManager: InputLayoutManaging {
+    private let preferences: PreferencesStoring
 
-    init(preferences: LayoutPreferences) {
+    init(preferences: PreferencesStoring) {
         self.preferences = preferences
     }
 

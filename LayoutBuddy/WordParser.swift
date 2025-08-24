@@ -3,7 +3,7 @@ import Foundation
 /// Parses a stream of characters into words.
 /// Maintains an internal buffer and exposes helper methods
 /// used by consumers such as the key handler.
-final class WordParser {
+final class WordParser: WordParsingProtocol {
     private(set) var wordBuffer = ""
     /// Read-only view of the internal buffer for consumers like `AppCoordinator`.
     var buffer: String { wordBuffer }
@@ -78,4 +78,3 @@ final class WordParser {
     func test_setBuffer(_ text: String) { wordBuffer = text }
     func test_getBuffer() -> String { wordBuffer }
 }
-

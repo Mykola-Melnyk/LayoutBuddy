@@ -7,9 +7,11 @@ final class AppCoordinator: NSObject {
 
     // MARK: - State
 
-    private let preferences: LayoutPreferences
-    private let layoutManager: KeyboardLayoutManager
+    private let preferences: PreferencesStoring
+    private let layoutManager: InputLayoutManaging
     private let menuBar: MenuBarController
+    private let spellChecker: SpellChecking
+    private let converter: LayoutConverting
     
     // Toggle diagnostics here
     private let enableDiagnostics = true
@@ -33,11 +35,10 @@ final class AppCoordinator: NSObject {
     private let isRunningUnitTests: Bool = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
     // Word tracking
-    private var wordParser = WordParser()
+    private var wordParser: WordParsingProtocol
     private var inEmail = false
 
-    // Spellchecker
-    private let spellDocTag: Int = NSSpellChecker.uniqueSpellDocumentTag()
+    // Spellchecker handled by service
 
     // Ambiguity “fix later” stack
     private struct AmbiguousCandidate {
@@ -59,10 +60,19 @@ final class AppCoordinator: NSObject {
 
     // MARK: - App lifecycle
 
-    init(preferences: LayoutPreferences = LayoutPreferences()) {
+    init(
+        preferences: PreferencesStoring = LayoutPreferences(),
+        layoutManager: InputLayoutManaging? = nil,
+        spellChecker: SpellChecking = NSSpellCheckerService(),
+        converter: LayoutConverting = PositionLayoutConverter(),
+        wordParser: WordParsingProtocol = WordParser()
+    ) {
         self.preferences = preferences
-        self.layoutManager = KeyboardLayoutManager(preferences: preferences)
-        self.menuBar = MenuBarController(layoutManager: layoutManager)
+        self.layoutManager = layoutManager ?? KeyboardLayoutManager(preferences: preferences)
+        self.menuBar = MenuBarController(layoutManager: self.layoutManager)
+        self.spellChecker = spellChecker
+        self.converter = converter
+        self.wordParser = wordParser
         super.init()
 
         eventTapController.delegate = self
@@ -132,10 +142,10 @@ final class AppCoordinator: NSObject {
         #endif
 
         for e in events {
-            e.post(tap: .cgAnnotatedSessionEventTap)
+            e.post(tap: .cghidEventTap)
             if let up = e.copy() {
                 up.type = .keyUp
-                up.post(tap: .cgAnnotatedSessionEventTap)
+                up.post(tap: .cghidEventTap)
             }
         }
     }
@@ -259,17 +269,7 @@ final class AppCoordinator: NSObject {
 
     // MARK: - Spellcheck
 
-    private func bestSpellLang(for prefix: String) -> String? {
-        NSSpellChecker.shared.availableLanguages.first { $0.hasPrefix(prefix) }
-    }
-
-    private func isSpelledCorrect(_ word: String, language: String) -> Bool {
-        let miss = NSSpellChecker.shared.checkSpelling(
-            of: word, startingAt: 0, language: language, wrap: false,
-            inSpellDocumentWithTag: spellDocTag, wordCount: nil
-        )
-        return miss.location == NSNotFound
-    }
+    // Spell checking is handled via injected service
 
     // MARK: - Process a completed word
 
@@ -284,18 +284,18 @@ final class AppCoordinator: NSObject {
         let (core, _) = wordParser.splitTrailingMapped(wordParser.buffer)
         let suspiciousEN = (curLangPrefix == "en") && wordParser.containsSuspiciousMapped(core)
 
-        guard let curSpell = bestSpellLang(for: curLangPrefix),
-              let otherSpell = bestSpellLang(for: otherLangPrefix) else {
+        guard let curSpell = spellChecker.bestLanguage(prefix: curLangPrefix),
+              let otherSpell = spellChecker.bestLanguage(prefix: otherLangPrefix) else {
             dlog("[PROC] reset buffer")
             wordParser.clear(); return
         }
 
         // Single-letter policy
         if core.count == 1 {
-            let curOK = isSpelledCorrect(core, language: curSpell)
+            let curOK = spellChecker.isSpelledCorrect(core, language: curSpell)
             let converted1 = convert(core, from: curLangPrefix, to: otherLangPrefix)
             dlog("[PROC] converted=\(converted1)")
-            let otherOK = !converted1.isEmpty && isSpelledCorrect(converted1, language: otherSpell)
+            let otherOK = !converted1.isEmpty && spellChecker.isSpelledCorrect(converted1, language: otherSpell)
 
             if curOK && otherOK {
                 captureAmbiguityLater(original: core, converted: converted1, targetLangPrefix: otherLangPrefix)
@@ -313,10 +313,10 @@ final class AppCoordinator: NSObject {
             }
         }
 
-        let curOK = !suspiciousEN && isSpelledCorrect(core, language: curSpell)
+        let curOK = !suspiciousEN && spellChecker.isSpelledCorrect(core, language: curSpell)
         let convertedCore = convert(core, from: curLangPrefix, to: otherLangPrefix)
         dlog("[PROC] converted=\(convertedCore)")
-        let otherOK = !convertedCore.isEmpty && isSpelledCorrect(convertedCore, language: otherSpell)
+        let otherOK = !convertedCore.isEmpty && spellChecker.isSpelledCorrect(convertedCore, language: otherSpell)
 
         // Tie: both valid → save candidate, no auto-change
         if curOK && otherOK {
@@ -389,8 +389,8 @@ final class AppCoordinator: NSObject {
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
         let vk = CGKeyCode(kVK_Delete)
         for _ in 0..<times {
-            CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: true)?.post(tap: .cgAnnotatedSessionEventTap)
-            CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: false)?.post(tap: .cgAnnotatedSessionEventTap)
+            CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: true)?.post(tap: .cghidEventTap)
+            CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: false)?.post(tap: .cghidEventTap)
         }
     }
 
@@ -404,10 +404,10 @@ final class AppCoordinator: NSObject {
             var u = UniChar(scalar.value)
             let down = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true)
             down?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &u)
-            down?.post(tap: .cgAnnotatedSessionEventTap)
+            down?.post(tap: .cghidEventTap)
             let up = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false)
             up?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &u)
-            up?.post(tap: .cgAnnotatedSessionEventTap)
+            up?.post(tap: .cghidEventTap)
         }
     }
 
@@ -418,8 +418,8 @@ final class AppCoordinator: NSObject {
         #endif
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
         let code: CGKeyCode = (key == .leftArrow) ? CGKeyCode(kVK_LeftArrow) : CGKeyCode(kVK_RightArrow)
-        CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: true)?.post(tap: .cgAnnotatedSessionEventTap)
-        CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: false)?.post(tap: .cgAnnotatedSessionEventTap)
+        CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: true)?.post(tap: .cghidEventTap)
+        CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: false)?.post(tap: .cghidEventTap)
     }
 
     private func tapKeyWithFlags(_ key: CGKeyCode, flags: CGEventFlags) {
@@ -430,10 +430,10 @@ final class AppCoordinator: NSObject {
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
         let down = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: true)
         down?.flags = flags
-        down?.post(tap: .cgAnnotatedSessionEventTap)
+        down?.post(tap: .cghidEventTap)
         let up = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: false)
         up?.flags = flags
-        up?.post(tap: .cgAnnotatedSessionEventTap)
+        up?.post(tap: .cghidEventTap)
     }
 
     private func optLeft()       { tapKeyWithFlags(CGKeyCode(kVK_LeftArrow),  flags: .maskAlternate) }
@@ -490,36 +490,8 @@ final class AppCoordinator: NSObject {
     // MARK: - EN ⇄ UK keyboard-position mapping
 
     func convert(_ word: String, from src: String, to dst: String) -> String {
-        if src == "en", dst == "uk" { return mapWord(word, using: en2uk) }
-        if src == "uk", dst == "en" { return mapWord(word, using: uk2en) }
-        return word
+        converter.convert(word, from: src, to: dst)
     }
-
-    private func mapWord(_ word: String, using table: [Character: String]) -> String {
-        var out = ""
-        for ch in word {
-            let isUpper = ch.isUppercase
-            let lower = Character(ch.lowercased())
-            if let mapped = table[lower] {
-                out += isUpper ? mapped.uppercased() : mapped
-            } else {
-                out.append(ch)
-            }
-        }
-        return out
-    }
-
-    private let en2uk: [Character: String] = [
-        "q":"й","w":"ц","e":"у","r":"к","t":"е","y":"н","u":"г","i":"ш","o":"щ","p":"з","[":"х","]":"ї",
-        "a":"ф","s":"і","d":"в","f":"а","g":"п","h":"р","j":"о","k":"л","l":"д",";":"ж","'":"є",
-        "z":"я","x":"ч","c":"с","v":"м","b":"и","n":"т","m":"ь",",":"б",".":"ю","/":"."
-    ]
-    private lazy var uk2en: [Character: String] = {
-        var rev: [Character: String] = [:]
-        for (k,v) in en2uk { for ch in v { rev[ch] = String(k) } }
-        rev["’"] = "'" // apostrophe variant
-        return rev
-    }()
 
     // MARK: - Accessibility helpers & tie capture
 

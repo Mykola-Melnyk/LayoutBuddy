@@ -1,7 +1,7 @@
 import Cocoa
 
 /// Handles storage and discovery of keyboard layout preferences.
-final class LayoutPreferences {
+final class LayoutPreferences: PreferencesStoring {
     private let defaults: UserDefaults
     private let kPrimaryIDKey = "PrimaryInputSourceID"
     private let kSecondaryIDKey = "SecondaryInputSourceID"

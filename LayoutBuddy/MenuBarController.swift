@@ -2,14 +2,14 @@ import Cocoa
 
 /// Handles status item and menu bar interactions.
 final class MenuBarController: NSObject {
-    private let layoutManager: KeyboardLayoutManager
+    private let layoutManager: InputLayoutManaging
     private let statusItem: NSStatusItem
 
     var onSetAsPrimary: ((String) -> Void)?
     var onSetAsSecondary: ((String) -> Void)?
     var onQuit: (() -> Void)?
 
-    init(layoutManager: KeyboardLayoutManager) {
+    init(layoutManager: InputLayoutManaging) {
         self.layoutManager = layoutManager
 
         // NSStatusItem (and the underlying window it uses) must be

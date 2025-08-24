@@ -24,6 +24,7 @@ let package = Package(
                 "KeyboardLayoutManager.swift",
                 "LayoutBuddyApp.swift",
                 "MenuBarController.swift",
+                "Services.swift",
                 "LayoutPreferences.swift",
                 "LayoutBuddy.entitlements",
                 "Assets.xcassets"
