@@ -156,6 +156,8 @@ final class AppCoordinator: NSObject {
                 return
             }
 
+            eventTapController.stop()
+
             let controller = NSHostingController(rootView: SettingsView())
             let window = NSWindow(contentViewController: controller)
             window.title = "Settings"
@@ -165,6 +167,7 @@ final class AppCoordinator: NSObject {
 
             NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
                 self?.settingsWindow = nil
+                self?.eventTapController.start()
             }
 
             settingsWindow = window
