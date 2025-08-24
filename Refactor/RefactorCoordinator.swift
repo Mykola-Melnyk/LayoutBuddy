@@ -29,24 +29,32 @@ final class RefactorCoordinator {
     }
 
     func start() {
-        input.start { [weak self] event in
-            self?.handleKeyEvent(event)
+        input.start { [weak self] ev in
+            self?.handleKeyEvent(ev)
         }
     }
 
+    private func isWordBoundary(_ ev: KeyEvent) -> Bool {
+        guard ev.type == .keyDown else { return false }
+        let code = ev.cgEvent.getIntegerValueField(.keyboardEventKeycode)
+        // Space (0x31), Return (0x24), Tab (0x30)
+        return code == 0x31 || code == 0x24 || code == 0x30
+    }
 
+    private var inFlight = false
+
+    private func handleKeyEvent(_ event: KeyEvent) {
+        if !isWordBoundary(event) { return }
+        if inFlight { return }           // throttle bursts
+        inFlight = true
+        Task { @MainActor [weak self] in
+            defer { self?.inFlight = false }
+            await self?.convertFocusedWord()
+        }
+    }
     
     func stop() {
         input.stop()
-    }
-
-
-
-    private func handleKeyEvent(_ event: KeyEvent) {
-        // Trigger conversion on any event; refine to hotkey if needed
-        Task { @MainActor in
-            await self.convertFocusedWord()
-        }
     }
 
     func convertFocusedWord() async {

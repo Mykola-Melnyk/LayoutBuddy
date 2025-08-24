@@ -1,13 +1,11 @@
 import AppKit
-
+import ApplicationServices
 
 final class EventTapInputMonitor: InputMonitor {
     private var tap: CFMachPort?
     private var onEvent: ((KeyEvent) -> Void)?
 
-    // keyDown + flagsChanged
-    private let mask: CGEventMask =
-        (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
+    private let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
 
     func start(onEvent: @escaping (KeyEvent) -> Void) {
         self.onEvent = onEvent
@@ -22,10 +20,10 @@ final class EventTapInputMonitor: InputMonitor {
                 let monitor = Unmanaged<EventTapInputMonitor>
                     .fromOpaque(userInfo).takeUnretainedValue()
 
-                if monitor.isHotkey(event: event) {
-                    monitor.onEvent?(KeyEvent(type: type, cgEvent: event))
-                    return nil // swallow trigger if you prefer
-                }
+                // forward every keyDown to the coordinator
+                monitor.onEvent?(KeyEvent(type: type, cgEvent: event))
+
+                // never swallow keystrokes in auto mode
                 return Unmanaged.passUnretained(event)
             },
             userInfo: UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
@@ -35,20 +33,12 @@ final class EventTapInputMonitor: InputMonitor {
         let src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), src, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        print("LB: tap installed")
     }
 
     func stop() {
         if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
         tap = nil
         onEvent = nil
-    }
-
-    // Change this to your preferred hotkey: ⌃⌥⌘Space
-    private func isHotkey(event: CGEvent) -> Bool {
-        let flags = event.flags
-        let wantMods = [CGEventFlags.maskControl, .maskAlternate, .maskCommand]
-            .allSatisfy { flags.contains($0) }
-        let isSpace = event.getIntegerValueField(.keyboardEventKeycode) == 0x31
-        return wantMods && isSpace
     }
 }

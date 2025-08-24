@@ -1,7 +1,10 @@
 import ApplicationServices
 
-struct AXPermissions: Permissions {
-    var axReady: Bool {
-        AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: false] as CFDictionary)
+final class AXPermissions: Permissions {
+    var axReady: Bool { AXIsProcessTrusted() }
+
+    func requestIfNeeded() {
+        let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(opts)
     }
 }

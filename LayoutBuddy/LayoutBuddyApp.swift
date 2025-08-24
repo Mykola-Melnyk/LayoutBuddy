@@ -9,11 +9,8 @@ import SwiftUI
 
 @main
 struct LayoutBuddyApp: App {
-    // This line guarantees your AppDelegate is created and used.
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-
-    var body: some Scene {
-        // No main window; just a placeholder Settings scene.
-        Settings { EmptyView() }
-    }
+    var body: some Scene { Settings { EmptyView() } }
 }
+
+
