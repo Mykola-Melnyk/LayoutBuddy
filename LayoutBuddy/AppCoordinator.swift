@@ -266,14 +266,17 @@ final class AppCoordinator: NSObject {
         let convertHK = preferences.convertHotkey
         if keyCode == convertHK.keyCode && filtered == convertHK.modifiers {
             dlog("[HOTKEY] pressed — stack=\(ambiguityStack.count)")
-            if !ambiguityStack.isEmpty {
-                if isRunningUnitTests || testSimulationMode {
-                    applyMostRecentAmbiguityAndRestoreCaret()
+            let work = { [self] in
+                if !ambiguityStack.isEmpty {
+                    self.applyMostRecentAmbiguityAndRestoreCaret()
                 } else {
-                    DispatchQueue.main.async { self.applyMostRecentAmbiguityAndRestoreCaret() }
+                    NSSound.beep()
                 }
+            }
+            if isRunningUnitTests || testSimulationMode {
+                work()
             } else {
-                NSSound.beep()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: work)
             }
             return nil
         }
