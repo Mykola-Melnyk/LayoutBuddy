@@ -9,6 +9,7 @@ final class MenuBarController: NSObject {
     var onSetAsSecondary: ((String) -> Void)?
     var onQuit: (() -> Void)?
     var onToggleConversion: (() -> Void)?
+    var onOpenSettings: (() -> Void)?
 
     private var menu: NSMenu?
     private var isConversionOn = true
@@ -124,14 +125,7 @@ final class MenuBarController: NSObject {
     }
 
     @objc private func openSettings() {
-        let action = Selector(("showSettingsWindow:"))
-        if Thread.isMainThread {
-            NSApp.sendAction(action, to: nil, from: nil)
-        } else {
-            DispatchQueue.main.async {
-                NSApp.sendAction(action, to: nil, from: nil)
-            }
-        }
+        onOpenSettings?()
     }
 
     @objc private func statusItemClicked(_ sender: Any?) {

@@ -1,6 +1,7 @@
 import Cocoa
 import Carbon              // TIS* APIs + kVK_* keycodes
 import ApplicationServices // Accessibility (AX) APIs
+import SwiftUI
 
 
 // MARK: - Helpers
@@ -126,6 +127,10 @@ final class AppCoordinator: NSObject {
             self?.toggleConversion()
         }
 
+        menuBar.onOpenSettings = { [weak self] in
+            self?.openSettingsWindow()
+        }
+
         menuBar.setConversion(on: conversionOn)
     }
 
@@ -137,6 +142,41 @@ final class AppCoordinator: NSObject {
 
     func stop() {
         eventTapController.stop()
+    }
+
+    // MARK: - Settings
+
+    private var settingsWindow: NSWindow?
+
+    private func openSettingsWindow() {
+        let show: () -> Void = { [self] in
+            if let window = settingsWindow {
+                NSApp.activate(ignoringOtherApps: true)
+                window.makeKeyAndOrderFront(nil)
+                return
+            }
+
+            let controller = NSHostingController(rootView: SettingsView(preferences: preferences))
+            let window = NSWindow(contentViewController: controller)
+            window.title = "Settings"
+            window.center()
+            window.setFrameAutosaveName("Settings")
+            window.isReleasedWhenClosed = false
+
+            NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
+                self?.settingsWindow = nil
+            }
+
+            settingsWindow = window
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+        }
+
+        if Thread.isMainThread {
+            show()
+        } else {
+            DispatchQueue.main.async(execute: show)
+        }
     }
 
     // MARK: - Toggle
