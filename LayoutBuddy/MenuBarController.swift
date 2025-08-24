@@ -79,15 +79,23 @@ final class MenuBarController: NSObject {
     }
 
     func updateStatusTitleAndColor() {
-        guard let button = statusItem.button else { return }
-        // No text label in the menubar:
-        button.title = ""
-        button.attributedTitle = NSAttributedString(string: "")
-        // Keep a tooltip with the current layout's full name:
-        let curID = layoutManager.currentInputSourceID()
-        button.toolTip = fullName(for: curID) // e.g., "U.S." or "Ukrainian - PC"
-        // (Optional) If you ever want tint by layout, set:
-        // button.contentTintColor = layoutManager.isLanguage(id: curID, hasPrefix: "uk") ? .systemBlue : .labelColor
+        let update = { [self] in
+            guard let button = statusItem.button else { return }
+            // No text label in the menubar:
+            button.title = ""
+            button.attributedTitle = NSAttributedString(string: "")
+            // Keep a tooltip with the current layout's full name:
+            let curID = layoutManager.currentInputSourceID()
+            button.toolTip = fullName(for: curID) // e.g., "U.S." or "Ukrainian - PC"
+            // (Optional) If you ever want tint by layout, set:
+            // button.contentTintColor = layoutManager.isLanguage(id: curID, hasPrefix: "uk") ? .systemBlue : .labelColor
+        }
+
+        if Thread.isMainThread {
+            update()
+        } else {
+            DispatchQueue.main.async(execute: update)
+        }
     }
 
     private func shortName(for id: String) -> String {
