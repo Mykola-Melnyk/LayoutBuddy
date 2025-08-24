@@ -3,6 +3,30 @@ import Carbon              // TIS* APIs + kVK_* keycodes
 import ApplicationServices // Accessibility (AX) APIs
 
 
+// MARK: - Helpers
+
+private let lbLetters = CharacterSet.letters
+
+private extension CGEvent {
+    /// Returns the first unicode scalar from this keyboard event, if any.
+    var firstUnicodeScalar: UnicodeScalar? {
+        var length: UniCharCount = 0
+        self.keyboardGetUnicodeString(maxStringLength: 0, actualStringLength: &length, unicodeString: nil)
+        guard length > 0 else { return nil }
+        var buffer = [UniChar](repeating: 0, count: Int(length))
+        self.keyboardGetUnicodeString(maxStringLength: length, actualStringLength: &length, unicodeString: &buffer)
+        if let u = buffer.first { return UnicodeScalar(u) }
+        return nil
+    }
+}
+
+@inline(__always)
+private func isWordBoundaryOrPunctuation(_ s: UnicodeScalar) -> Bool {
+    // treat any non-letter as a boundary (space, ., !, ?, enter, etc.)
+    return !lbLetters.contains(s)
+}
+
+
 final class AppCoordinator: NSObject {
 
     // MARK: - State
@@ -179,17 +203,44 @@ final class AppCoordinator: NSObject {
             return Unmanaged.passUnretained(event)
         }
 
-        // Decode typed scalar
-        var buf = [UniChar](repeating: 0, count: 4)
-        var len = 0
-        event.keyboardGetUnicodeString(maxStringLength: 4, actualStringLength: &len, unicodeString: &buf)
-        guard len > 0, let scalar = UnicodeScalar(buf[0]) else {
+        guard let scalar = event.firstUnicodeScalar else {
             return Unmanaged.passUnretained(event)
+        }
+
+        if isWordBoundaryOrPunctuation(scalar) {
+            let beforeText = focusedTextBeforeCaret()
+            guard let r = lastWordRange(in: beforeText) else {
+                wordParser.clear()
+                bumpWordsAhead()
+                return Unmanaged.passUnretained(event)
+            }
+            let sourceWord = String(beforeText[r])
+            let curID = layoutManager.currentInputSourceID()
+            let curLangPrefix = isLayoutUkrainian(curID) ? "uk" : "en"
+            let otherLangPrefix = (curLangPrefix == "en") ? "uk" : "en"
+            let converted = convert(sourceWord, from: curLangPrefix, to: otherLangPrefix)
+            let deleteCount = sourceWord.count
+            wordParser.clear()
+            bumpWordsAhead()
+
+            let eventCopy = event.copy()
+            DispatchQueue.main.async {
+                self.isSynthesizing = true
+                self.sendBackspace(times: deleteCount)
+                let targetID = self.layoutID(forLanguagePrefix: otherLangPrefix) ?? self.otherLayoutID()
+                self.ensureSwitch(to: targetID) {
+                    self.typeUnicode(converted)
+                    eventCopy?.post(tap: .cgAnnotatedSessionEventTap)
+                    self.menuBar.updateStatusTitleAndColor()
+                    self.isSynthesizing = false
+                }
+            }
+            playSwitchSound()
+            return nil
         }
 
         dlog("[KEY] decoded scalar=\(scalar) buffer=\(wordParser.buffer)")
 
-        // If we're in the middle of typing an email address, skip processing
         if inEmail {
             if CharacterSet.whitespacesAndNewlines.contains(scalar) {
                 inEmail = false
@@ -198,7 +249,6 @@ final class AppCoordinator: NSObject {
             return Unmanaged.passUnretained(event)
         }
 
-        // Keep email addresses untouched — '@' should start email mode
         if scalar == UnicodeScalar(64) { // '@'
             wordParser.clear()
             inEmail = true
@@ -206,15 +256,9 @@ final class AppCoordinator: NSObject {
             return Unmanaged.passUnretained(event)
         }
 
-        // Letters & ABC-keys-that-map-to-UA-letters → extend current word
         let currentIsLatin = isLayoutLatin(layoutManager.currentInputSourceID())
         if wordParser.isLatinLetter(scalar) || wordParser.isCyrillicLetter(scalar) || (currentIsLatin && wordParser.isMappedLatinPunctuation(scalar)) {
             dlog("[KEY] letters case buffer=\(wordParser.buffer) scalar=\(scalar)")
-            // If the script of the incoming scalar differs from the script of
-            // the buffered word, process the buffered word first so that the
-            // new character starts a fresh word. This avoids cases where the
-            // first character of the next word becomes glued to the previous
-            // one, e.g. "helloщ" or "привітn".
             if let first = wordParser.buffer.unicodeScalars.first {
                 let firstIsLatin = wordParser.isLatinLetter(first) || wordParser.isMappedLatinPunctuation(first)
                 let newIsLatin = wordParser.isLatinLetter(scalar) || (currentIsLatin && wordParser.isMappedLatinPunctuation(scalar))
@@ -231,19 +275,7 @@ final class AppCoordinator: NSObject {
             return Unmanaged.passUnretained(event)
         }
 
-        // Boundary → evaluate buffered word, keep boundary char
-        if wordParser.isBoundary(scalar) {
-            dlog("[KEY] boundary before process buffer=\(wordParser.buffer) scalar=\(scalar)")
-            processBufferedWordIfNeeded(keepFollowingBoundary: true)
-            dlog("[KEY] boundary after process buffer=\(wordParser.buffer)")
-            bumpWordsAhead()
-            return Unmanaged.passUnretained(event)
-        }
-
-        // Other symbols → treat like boundary
-        dlog("[KEY] other symbol before process buffer=\(wordParser.buffer) scalar=\(scalar)")
-        processBufferedWordIfNeeded(keepFollowingBoundary: true)
-        dlog("[KEY] other symbol after process buffer=\(wordParser.buffer)")
+        wordParser.clear()
         bumpWordsAhead()
         return Unmanaged.passUnretained(event)
     }
@@ -584,6 +616,17 @@ final class AppCoordinator: NSObject {
             return s
         }
         return nil
+    }
+
+    private func focusedTextBeforeCaret() -> String {
+        #if DEBUG
+        if testSimulationMode { return testDocumentText }
+        #endif
+        if let el = axFocusedElement(), let caret = axSelectedRange(el) {
+            let range = CFRange(location: 0, length: caret.location)
+            return axStringForRange(el, range) ?? ""
+        }
+        return ""
     }
 
     private func axSetSelectedRange(_ el: AXUIElement, _ range: NSRange) -> Bool {
