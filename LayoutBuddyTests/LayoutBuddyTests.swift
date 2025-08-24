@@ -18,6 +18,8 @@ import Carbon
 
 import Foundation
 
+@Suite(.serialized)
+@MainActor
 struct LayoutBuddyTests {
     
     @Test func testEnglishInputProducesUkrainianOutput() throws {

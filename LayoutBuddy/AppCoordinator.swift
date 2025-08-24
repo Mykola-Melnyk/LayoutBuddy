@@ -156,7 +156,14 @@ final class AppCoordinator: NSObject {
 
     // MARK: - Feedback
 
-    private func playSwitchSound() { NSSound.beep() }
+    private func playSwitchSound() {
+        let work = { NSSound.beep() }
+        if Thread.isMainThread {
+            work()
+        } else {
+            DispatchQueue.main.async(execute: work)
+        }
+    }
 
     private func enqueueQueuedEvent(_ event: CGEvent) {
         queuedEventsLock.lock()
