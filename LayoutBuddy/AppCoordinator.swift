@@ -207,38 +207,6 @@ final class AppCoordinator: NSObject {
             return Unmanaged.passUnretained(event)
         }
 
-        if isWordBoundaryOrPunctuation(scalar) {
-            let beforeText = focusedTextBeforeCaret()
-            guard let r = lastWordRange(in: beforeText) else {
-                wordParser.clear()
-                bumpWordsAhead()
-                return Unmanaged.passUnretained(event)
-            }
-            let sourceWord = String(beforeText[r])
-            let curID = layoutManager.currentInputSourceID()
-            let curLangPrefix = isLayoutUkrainian(curID) ? "uk" : "en"
-            let otherLangPrefix = (curLangPrefix == "en") ? "uk" : "en"
-            let converted = convert(sourceWord, from: curLangPrefix, to: otherLangPrefix)
-            let deleteCount = sourceWord.count
-            wordParser.clear()
-            bumpWordsAhead()
-
-            let eventCopy = event.copy()
-            DispatchQueue.main.async {
-                self.isSynthesizing = true
-                self.sendBackspace(times: deleteCount)
-                let targetID = self.layoutID(forLanguagePrefix: otherLangPrefix) ?? self.otherLayoutID()
-                self.ensureSwitch(to: targetID) {
-                    self.typeUnicode(converted)
-                    eventCopy?.post(tap: .cgAnnotatedSessionEventTap)
-                    self.menuBar.updateStatusTitleAndColor()
-                    self.isSynthesizing = false
-                }
-            }
-            playSwitchSound()
-            return nil
-        }
-
         dlog("[KEY] decoded scalar=\(scalar) buffer=\(wordParser.buffer)")
 
         if inEmail {
@@ -275,6 +243,16 @@ final class AppCoordinator: NSObject {
             return Unmanaged.passUnretained(event)
         }
 
+        if isWordBoundaryOrPunctuation(scalar) {
+            let eventCopy = event.copy()
+            dlog("[KEY] boundary before process buffer=\(wordParser.buffer) scalar=\(scalar)")
+            let replaced = processBufferedWordIfNeeded(boundaryEvent: eventCopy)
+            dlog("[KEY] boundary after process buffer=\(wordParser.buffer)")
+            bumpWordsAhead()
+            if !replaced { eventCopy?.post(tap: .cgAnnotatedSessionEventTap) }
+            return nil
+        }
+
         wordParser.clear()
         bumpWordsAhead()
         return Unmanaged.passUnretained(event)
@@ -305,8 +283,8 @@ final class AppCoordinator: NSObject {
 
     // MARK: - Process a completed word
 
-    private func processBufferedWordIfNeeded(keepFollowingBoundary: Bool = false) {
-        guard !wordParser.buffer.isEmpty else { return }
+    private func processBufferedWordIfNeeded(keepFollowingBoundary: Bool = false, boundaryEvent: CGEvent? = nil) -> Bool {
+        guard !wordParser.buffer.isEmpty else { return false }
         dlog("[PROC] entry buffer=\(wordParser.buffer)")
 
         let curID = layoutManager.currentInputSourceID()
@@ -332,16 +310,16 @@ final class AppCoordinator: NSObject {
             if curOK && otherOK {
                 captureAmbiguityLater(original: core, converted: converted1, targetLangPrefix: otherLangPrefix)
                 dlog("[PROC] reset buffer")
-                wordParser.clear(); return
+                wordParser.clear(); return false
             } else if !curOK && otherOK {
                 replaceLastWord(with: converted1, targetLangPrefix: otherLangPrefix,
-                                keepFollowingBoundary: keepFollowingBoundary, deleteCountOverride: core.count)
+                                keepFollowingBoundary: keepFollowingBoundary, boundaryEvent: boundaryEvent, deleteCountOverride: core.count)
                 playSwitchSound(); menuBar.updateStatusTitleAndColor()
                 dlog("[PROC] reset buffer")
-                wordParser.clear(); return
+                wordParser.clear(); return true
             } else {
                 dlog("[PROC] reset buffer")
-                wordParser.clear(); return
+                wordParser.clear(); return false
             }
         }
 
@@ -354,11 +332,11 @@ final class AppCoordinator: NSObject {
         if curOK && otherOK {
             captureAmbiguityLater(original: core, converted: convertedCore, targetLangPrefix: otherLangPrefix)
             dlog("[PROC] reset buffer")
-            wordParser.clear(); return
+            wordParser.clear(); return false
         }
 
         // Keep if current is valid
-        if curOK && !otherOK { dlog("[PROC] reset buffer"); wordParser.clear(); return }
+        if curOK && !otherOK { dlog("[PROC] reset buffer"); wordParser.clear(); return false }
 
         var shouldReplace = otherOK
         // Fallback: ABC-typed but looks Ukrainian after mapping
@@ -368,12 +346,15 @@ final class AppCoordinator: NSObject {
 
         if shouldReplace {
             replaceLastWord(with: convertedCore, targetLangPrefix: otherLangPrefix,
-                            keepFollowingBoundary: keepFollowingBoundary, deleteCountOverride: core.count)
+                            keepFollowingBoundary: keepFollowingBoundary, boundaryEvent: boundaryEvent, deleteCountOverride: core.count)
             playSwitchSound(); menuBar.updateStatusTitleAndColor()
+            dlog("[PROC] reset buffer")
+            wordParser.clear()
+            return true
         }
-
         dlog("[PROC] reset buffer")
         wordParser.clear()
+        return false
     }
 
     private func isAllCyrillic(_ s: String) -> Bool {
@@ -387,6 +368,7 @@ final class AppCoordinator: NSObject {
     private func replaceLastWord(with newWord: String,
                                  targetLangPrefix: String,
                                  keepFollowingBoundary: Bool,
+                                 boundaryEvent: CGEvent? = nil,
                                  deleteCountOverride: Int? = nil) {
         let deleteCount = deleteCountOverride ?? wordParser.buffer.count
 
@@ -404,6 +386,7 @@ final class AppCoordinator: NSObject {
                 let targetID = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
                 self.ensureSwitch(to: targetID) {
                     self.typeUnicode(newWord)
+                    boundaryEvent?.post(tap: .cgAnnotatedSessionEventTap)
                     if keepFollowingBoundary { self.tapKey(.rightArrow) }
                     self.menuBar.updateStatusTitleAndColor()
                     self.isSynthesizing = false
