@@ -380,7 +380,8 @@ final class AppCoordinator: NSObject {
         let deleteCount = deleteCountOverride ?? wordParser.buffer.count
         #if DEBUG
         if isRunningUnitTests || testSimulationMode {
-            for _ in 0..<deleteCount { testDocumentText.removeLast() }
+            let removeCount = min(deleteCount, testDocumentText.count)
+            for _ in 0..<removeCount { testDocumentText.removeLast() }
             testDocumentText += newWord
             if let s = boundaryEvent?.firstUnicodeScalar {
                 testDocumentText.unicodeScalars.append(s)
