@@ -21,11 +21,11 @@ private struct GeneralSettingsView: View {
         VStack(alignment: .leading) {
             Toggle("Launch LayoutBuddy at login", isOn: $launchAtLogin)
                 .toggleStyle(.checkbox)
-                .onChange(of: launchAtLogin) { enabled in
+                .onChange(of: launchAtLogin) { _, enabled in
                     if enabled {
                         try? SMAppService.mainApp.register()
                     } else {
-                        SMAppService.mainApp.unregister()
+                        try? SMAppService.mainApp.unregister()
                     }
                 }
             Spacer()
