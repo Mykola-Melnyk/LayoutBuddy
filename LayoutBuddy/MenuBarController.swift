@@ -46,7 +46,7 @@ final class MenuBarController: NSObject {
     private func setupStatusItem() {
         statusItem.button?.target = self
         statusItem.button?.action = #selector(statusItemClicked(_:))
-        statusItem.button?.sendAction(on: [.rightMouseUp])
+        statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
 
         updateIcon()
         rebuildMenu()
@@ -54,33 +54,48 @@ final class MenuBarController: NSObject {
     }
 
     private func updateIcon() {
-        let symbol = isConversionOn ? "infinity" : "infinity.circle.fill"
-        if let img = NSImage(systemSymbolName: symbol, accessibilityDescription: "LayoutBuddy") {
-            img.isTemplate = true // adopt menu bar tint (auto light/dark)
-            statusItem.button?.image = img
-            statusItem.button?.imagePosition = .imageOnly
+        let work = { [self] in
+            let symbol = isConversionOn ? "infinity" : "infinity.circle.fill"
+            if let img = NSImage(systemSymbolName: symbol, accessibilityDescription: "LayoutBuddy") {
+                img.isTemplate = true // adopt menu bar tint (auto light/dark)
+                statusItem.button?.image = img
+                statusItem.button?.imagePosition = .imageOnly
+            } else {
+                // Fallback if SF Symbol unavailable (very old macOS): still icon-only
+                statusItem.button?.title = "∞"
+                statusItem.button?.imagePosition = .noImage
+            }
+        }
+
+        if Thread.isMainThread {
+            work()
         } else {
-            // Fallback if SF Symbol unavailable (very old macOS): still icon-only
-            statusItem.button?.title = "∞"
-            statusItem.button?.imagePosition = .noImage
+            DispatchQueue.main.sync(execute: work)
         }
     }
 
     func rebuildMenu() {
-        let menu = NSMenu()
+        let build = { [self] in
+            let menu = NSMenu()
 
-        let toggleTitle = isConversionOn ? "Turn conversion OFF" : "Turn conversion ON"
-        let toggleItem = NSMenuItem(title: toggleTitle, action: #selector(toggleConversionMenu), keyEquivalent: "0")
-        toggleItem.keyEquivalentModifierMask = [.control, .option, .command]
-        toggleItem.target = self
-        menu.addItem(toggleItem)
+            let toggleTitle = isConversionOn ? "Turn conversion OFF" : "Turn conversion ON"
+            let toggleItem = NSMenuItem(title: toggleTitle, action: #selector(toggleConversionMenu), keyEquivalent: "0")
+            toggleItem.keyEquivalentModifierMask = [.control, .option, .command]
+            toggleItem.target = self
+            menu.addItem(toggleItem)
 
-        let quitItem = NSMenuItem(title: "Quit LayoutBuddy", action: #selector(quit), keyEquivalent: "q")
-        quitItem.target = self
-        menu.addItem(quitItem)
+            let quitItem = NSMenuItem(title: "Quit LayoutBuddy", action: #selector(quit), keyEquivalent: "q")
+            quitItem.target = self
+            menu.addItem(quitItem)
 
-        self.menu = menu
-        statusItem.menu = menu
+            self.menu = menu
+        }
+
+        if Thread.isMainThread {
+            build()
+        } else {
+            DispatchQueue.main.sync(execute: build)
+        }
     }
 
     @objc private func setAsPrimary(_ sender: NSMenuItem) {
@@ -104,8 +119,12 @@ final class MenuBarController: NSObject {
     }
 
     @objc private func statusItemClicked(_ sender: Any?) {
-        statusItem.menu = nil
-        onToggleConversion?()
+        guard let event = NSApp.currentEvent else { return }
+        if event.type == .rightMouseUp {
+            onToggleConversion?()
+        } else if let menu = menu, let button = statusItem.button {
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height), in: button)
+        }
     }
 
     func setConversion(on: Bool) {
