@@ -37,8 +37,32 @@ private struct GeneralSettingsView: View {
 }
 
 private struct ShortcutsSettingsView: View {
+    @State private var toggleHotkey = LayoutPreferences().toggleHotkey
+    @State private var convertHotkey = LayoutPreferences().convertHotkey
+    private let prefs = LayoutPreferences()
+
     var body: some View {
-        Text("Shortcut settings will appear here.")
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Toggle conversion on/off")
+                Spacer()
+                HotkeyRecorder(hotkey: $toggleHotkey)
+                    .frame(width: 160)
+            }
+            HStack {
+                Text("Convert last ambiguous word")
+                Spacer()
+                HotkeyRecorder(hotkey: $convertHotkey)
+                    .frame(width: 160)
+            }
+            Spacer()
+        }
+        .onChange(of: toggleHotkey) { _, newValue in
+            prefs.toggleHotkey = newValue
+        }
+        .onChange(of: convertHotkey) { _, newValue in
+            prefs.convertHotkey = newValue
+        }
     }
 }
 

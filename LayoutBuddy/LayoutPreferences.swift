@@ -1,4 +1,5 @@
 import Cocoa
+import Carbon
 
 /// Handles storage and discovery of keyboard layout preferences.
 final class LayoutPreferences {
@@ -44,5 +45,47 @@ final class LayoutPreferences {
             return differentLang.id
         }
         return all.first(where: { $0.id != primary })?.id ?? primary
+    }
+
+    // MARK: - Hotkeys
+    private let kToggleHotkeyKey = "ToggleConversionHotkey"
+    private let kConvertHotkeyKey = "ConvertLastHotkey"
+
+    var toggleHotkey: Hotkey {
+        get {
+            if let data = defaults.data(forKey: kToggleHotkeyKey),
+               let hk = try? JSONDecoder().decode(Hotkey.self, from: data) {
+                return hk
+            }
+            return Hotkey(
+                keyCode: CGKeyCode(kVK_ANSI_0),
+                modifiers: [.control, .option, .command],
+                display: "⌃⌥⌘0"
+            )
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: kToggleHotkeyKey)
+            }
+        }
+    }
+
+    var convertHotkey: Hotkey {
+        get {
+            if let data = defaults.data(forKey: kConvertHotkeyKey),
+               let hk = try? JSONDecoder().decode(Hotkey.self, from: data) {
+                return hk
+            }
+            return Hotkey(
+                keyCode: CGKeyCode(kVK_Space),
+                modifiers: [.control, .option],
+                display: "⌃⌥Space"
+            )
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: kConvertHotkeyKey)
+            }
+        }
     }
 }

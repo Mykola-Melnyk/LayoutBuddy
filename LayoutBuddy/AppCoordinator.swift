@@ -243,14 +243,15 @@ final class AppCoordinator: NSObject {
         }
         guard event.type == .keyDown else { return Unmanaged.passUnretained(event) }
 
-        let flags   = event.flags
-        let hasCmd  = flags.contains(.maskCommand)
-        let hasCtrl = flags.contains(.maskControl)
-       let hasAlt  = flags.contains(.maskAlternate)
+        let nsFlags = NSEvent.ModifierFlags(rawValue: event.flags.rawValue)
+        let filtered = nsFlags.intersection([.command, .control, .option, .shift])
         let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+        let hasCmd  = filtered.contains(.command)
+        let hasCtrl = filtered.contains(.control)
+        let hasAlt  = filtered.contains(.option)
 
-        // Hotkey: Control + Option + Command + 0 → toggle conversion
-        if hasCmd && hasCtrl && hasAlt && keyCode == CGKeyCode(kVK_ANSI_0) {
+        let toggleHK = preferences.toggleHotkey
+        if keyCode == toggleHK.keyCode && filtered == toggleHK.modifiers {
             if isRunningUnitTests {
                 toggleConversion()
             } else {
@@ -259,8 +260,8 @@ final class AppCoordinator: NSObject {
             return nil
         }
 
-        // Hotkey: Control + Option + Space → apply most recent ambiguous word
-        if hasCtrl && hasAlt && keyCode == CGKeyCode(kVK_Space) {
+        let convertHK = preferences.convertHotkey
+        if keyCode == convertHK.keyCode && filtered == convertHK.modifiers {
             dlog("[HOTKEY] pressed — stack=\(ambiguityStack.count)")
             if !ambiguityStack.isEmpty {
                 DispatchQueue.main.async { self.applyMostRecentAmbiguityAndRestoreCaret() }
