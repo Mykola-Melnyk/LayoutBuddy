@@ -34,6 +34,7 @@ final class AppCoordinator: NSObject {
     private let preferences: LayoutPreferences
     private let layoutManager: KeyboardLayoutManager
     private let menuBar: MenuBarController
+    private var conversionOn = true
     
     // Toggle diagnostics here
     private let enableDiagnostics = true
@@ -120,6 +121,12 @@ final class AppCoordinator: NSObject {
         menuBar.onQuit = {
             NSApplication.shared.terminate(nil)
         }
+
+        menuBar.onToggleConversion = { [weak self] in
+            self?.toggleConversion()
+        }
+
+        menuBar.setConversion(on: conversionOn)
     }
 
     func start() {
@@ -138,6 +145,12 @@ final class AppCoordinator: NSObject {
         layoutManager.toggleLayout()
         playSwitchSound()
         menuBar.updateStatusTitleAndColor()
+    }
+
+    private func toggleConversion() {
+        conversionOn.toggle()
+        wordParser.clear()
+        menuBar.setConversion(on: conversionOn)
     }
 
     // MARK: - Feedback
@@ -183,8 +196,14 @@ final class AppCoordinator: NSObject {
         let flags   = event.flags
         let hasCmd  = flags.contains(.maskCommand)
         let hasCtrl = flags.contains(.maskControl)
-        let hasAlt  = flags.contains(.maskAlternate)
+       let hasAlt  = flags.contains(.maskAlternate)
         let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+
+        // Hotkey: Control + Option + Command + 0 → toggle conversion
+        if hasCmd && hasCtrl && hasAlt && keyCode == CGKeyCode(kVK_ANSI_0) {
+            DispatchQueue.main.async { self.toggleConversion() }
+            return nil
+        }
 
         // Hotkey: Control + Option + Space → apply most recent ambiguous word
         if hasCtrl && hasAlt && keyCode == CGKeyCode(kVK_Space) {
@@ -196,6 +215,8 @@ final class AppCoordinator: NSObject {
             }
             return nil
         }
+
+        if !conversionOn { return Unmanaged.passUnretained(event) }
 
         // Ignore other Cmd/Ctrl shortcuts (let plain Alt combos pass)
         if hasCmd || hasCtrl { return Unmanaged.passUnretained(event) }
