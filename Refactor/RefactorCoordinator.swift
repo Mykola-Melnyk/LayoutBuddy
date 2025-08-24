@@ -36,9 +36,26 @@ final class RefactorCoordinator {
 
     private func isWordBoundary(_ ev: KeyEvent) -> Bool {
         guard ev.type == .keyDown else { return false }
+
+        // Always treat Return and Tab as boundaries by keycode
         let code = ev.cgEvent.getIntegerValueField(.keyboardEventKeycode)
-        // Space (0x31), Return (0x24), Tab (0x30)
-        return code == 0x31 || code == 0x24 || code == 0x30
+        if code == 0x24 || code == 0x30 { return true } // Return, Tab
+
+        // Try to classify by produced Unicode character (layout-aware)
+        var buf = [UniChar](repeating: 0, count: 4)
+        var len: Int = 0
+        ev.cgEvent.keyboardGetUnicodeString(maxStringLength: 4, actualStringLength: &len, unicodeString: &buf)
+        if len > 0 {
+            let scalar = UnicodeScalar(buf[0])
+            if let scalar {
+                if CharacterSet.whitespacesAndNewlines.contains(scalar) { return true }
+                if CharacterSet.punctuationCharacters.contains(scalar) { return true }
+            }
+        }
+
+        // Fallback: treat Space by keycode as boundary
+        // Space keycode is 0x31 on macOS key layouts
+        return code == 0x31
     }
 
     private var inFlight = false

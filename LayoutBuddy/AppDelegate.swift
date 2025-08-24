@@ -20,7 +20,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // (optional) prompt for Accessibility/Input Monitoring
         let perms = AXPermissions()
         perms.requestIfNeeded()
-
         // Start coordinator
         coordinator = RefactorCoordinator(
             input: EventTapInputMonitor(),

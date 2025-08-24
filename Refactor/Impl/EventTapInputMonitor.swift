@@ -10,8 +10,10 @@ final class EventTapInputMonitor: InputMonitor {
     func start(onEvent: @escaping (KeyEvent) -> Void) {
         self.onEvent = onEvent
 
+        // Use the session event tap, which is sufficient for keyDown monitoring
+        // and typically does not require the lower-level HID privileges.
         tap = CGEvent.tapCreate(
-            tap: .cghidEventTap,
+            tap: .cgSessionEventTap,
             place: .headInsertEventTap,
             options: .defaultTap,
             eventsOfInterest: mask,
