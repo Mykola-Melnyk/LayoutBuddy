@@ -26,6 +26,8 @@ let package = Package(
                 "SettingsView.swift",
                 "MenuBarController.swift",
                 "LayoutPreferences.swift",
+                "Hotkey.swift",
+                "HotkeyRecorder.swift",
                 "LayoutBuddy.entitlements",
                 "Assets.xcassets"
             ]

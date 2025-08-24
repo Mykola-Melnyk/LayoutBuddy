@@ -156,6 +156,8 @@ final class AppCoordinator: NSObject {
                 return
             }
 
+            eventTapController.stop()
+
             let controller = NSHostingController(rootView: SettingsView())
             let window = NSWindow(contentViewController: controller)
             window.title = "Settings"
@@ -164,7 +166,8 @@ final class AppCoordinator: NSObject {
             window.isReleasedWhenClosed = false
 
             NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
-                self?.settingsWindow = nil
+self?.settingsWindow = nil
+                self?.eventTapController.start()
             }
 
             settingsWindow = window
@@ -197,6 +200,8 @@ final class AppCoordinator: NSObject {
     // MARK: - Feedback
 
     private func playSwitchSound() {
+        let shouldPlay = UserDefaults.standard.object(forKey: "PlaySoundAtLayoutConversion") as? Bool ?? true
+        guard shouldPlay else { return }
         let work = { NSSound.beep() }
         if Thread.isMainThread {
             work()
@@ -241,15 +246,16 @@ final class AppCoordinator: NSObject {
         }
         guard event.type == .keyDown else { return Unmanaged.passUnretained(event) }
 
-        let flags   = event.flags
-        let hasCmd  = flags.contains(.maskCommand)
-        let hasCtrl = flags.contains(.maskControl)
-       let hasAlt  = flags.contains(.maskAlternate)
+        let nsFlags = NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue))
+        let filtered: NSEvent.ModifierFlags = nsFlags.intersection([.command, .control, .option, .shift])
         let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+        let hasCmd  = filtered.contains(.command)
+        let hasCtrl = filtered.contains(.control)
+        let hasAlt  = filtered.contains(.option)
 
-        // Hotkey: Control + Option + Command + 0 → toggle conversion
-        if hasCmd && hasCtrl && hasAlt && keyCode == CGKeyCode(kVK_ANSI_0) {
-            if isRunningUnitTests {
+        let toggleHK = preferences.toggleHotkey
+        if keyCode == toggleHK.keyCode && filtered == toggleHK.modifiers {
+            if isRunningUnitTests || testSimulationMode {
                 toggleConversion()
             } else {
                 DispatchQueue.main.async { self.toggleConversion() }
@@ -257,13 +263,20 @@ final class AppCoordinator: NSObject {
             return nil
         }
 
-        // Hotkey: Control + Option + Space → apply most recent ambiguous word
-        if hasCtrl && hasAlt && keyCode == CGKeyCode(kVK_Space) {
+        let convertHK = preferences.convertHotkey
+        if keyCode == convertHK.keyCode && filtered == convertHK.modifiers {
             dlog("[HOTKEY] pressed — stack=\(ambiguityStack.count)")
-            if !ambiguityStack.isEmpty {
-                DispatchQueue.main.async { self.applyMostRecentAmbiguityAndRestoreCaret() }
+            let work = { [self] in
+                if !ambiguityStack.isEmpty {
+                    self.applyMostRecentAmbiguityAndRestoreCaret()
+                } else {
+                    NSSound.beep()
+                }
+            }
+            if isRunningUnitTests || testSimulationMode {
+                work()
             } else {
-                NSSound.beep()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: work)
             }
             return nil
         }
@@ -332,7 +345,14 @@ final class AppCoordinator: NSObject {
             let replaced = processBufferedWordIfNeeded(boundaryEvent: eventCopy)
             dlog("[KEY] boundary after process buffer=\(wordParser.buffer)")
             bumpWordsAhead()
-            if !replaced { eventCopy?.post(tap: .cgAnnotatedSessionEventTap) }
+            if !replaced {
+                if isRunningUnitTests || testSimulationMode {
+                    return Unmanaged.passUnretained(event)
+                } else {
+                    eventCopy?.post(tap: .cgAnnotatedSessionEventTap)
+                    return nil
+                }
+            }
             return nil
         }
 
@@ -930,7 +950,7 @@ final class AppCoordinator: NSObject {
             return
         }
         #endif
-        DispatchQueue.main.async {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             let curID = self.layoutManager.currentInputSourceID()
             let targetID = self.layoutID(forLanguagePrefix: cand.targetLangPrefix) ?? self.otherLayoutID()
             self.dlog("[NAVREP] start synth=\(self.isSynthesizing) curID=\(curID) targetID=\(targetID) buffer=\(self.wordParser.buffer)")

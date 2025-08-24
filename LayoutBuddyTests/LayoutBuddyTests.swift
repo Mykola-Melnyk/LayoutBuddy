@@ -21,6 +21,10 @@ import Foundation
 @Suite(.serialized)
 @MainActor
 struct LayoutBuddyTests {
+
+    init() {
+        AppCoordinator().testSetSimulationMode(true)
+    }
     
     @Test func testEnglishInputProducesUkrainianOutput() throws {
             let app = AppCoordinator()
@@ -201,26 +205,35 @@ struct LayoutBuddyTests {
     }
 
     @Test func testShortcutTogglesConversion() throws {
+        #if os(macOS)
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let prefs = LayoutPreferences(defaults: defaults)
+        let app = AppCoordinator(preferences: prefs)
+        let keyCode = prefs.toggleHotkey.keyCode
+        let flags = CGEventFlags(rawValue: UInt64(prefs.toggleHotkey.modifiers.rawValue))
+        #else
         let app = AppCoordinator()
+        let keyCode = CGKeyCode(29)
+        let flags: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate]
+        #endif
         #expect(app.testConversionOn)
 
-        let keyCode: CGKeyCode = 29 // kVK_ANSI_0
         guard let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true) else {
             #expect(Bool(false), "Unable to create CGEvent for testing")
             return
         }
-        event.flags = CGEventFlags([.maskCommand, .maskControl, .maskAlternate])
+        event.flags = flags
 
         defer {
             if !app.testConversionOn {
-                _ = app.testHandleKeyEvent(type: .keyDown, event: event)
+                _ = app.testHandleKeyEvent(type: CGEventType.keyDown, event: event)
             }
         }
 
-        _ = app.testHandleKeyEvent(type: .keyDown, event: event)
+        _ = app.testHandleKeyEvent(type: CGEventType.keyDown, event: event)
         #expect(!app.testConversionOn)
 
-        _ = app.testHandleKeyEvent(type: .keyDown, event: event)
+        _ = app.testHandleKeyEvent(type: CGEventType.keyDown, event: event)
         #expect(app.testConversionOn)
     }
 
