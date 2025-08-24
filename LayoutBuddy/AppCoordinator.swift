@@ -151,6 +151,7 @@ final class AppCoordinator: NSObject {
         conversionOn.toggle()
         wordParser.clear()
         menuBar.setConversion(on: conversionOn)
+        playSwitchSound()
     }
 
     // MARK: - Feedback
@@ -216,9 +217,12 @@ final class AppCoordinator: NSObject {
             return nil
         }
 
+        // Ignore plain Option combos to avoid interfering with system shortcuts
+        if hasAlt && !hasCmd && !hasCtrl { return Unmanaged.passUnretained(event) }
+
         if !conversionOn { return Unmanaged.passUnretained(event) }
 
-        // Ignore other Cmd/Ctrl shortcuts (let plain Alt combos pass)
+        // Ignore other Cmd/Ctrl shortcuts
         if hasCmd || hasCtrl { return Unmanaged.passUnretained(event) }
 
         // Backspace/delete edits the current word buffer without triggering processing
@@ -933,6 +937,9 @@ extension AppCoordinator {
 
     // Enable deterministic simulation mode for unit tests (no CGEvents posted).
     func testSetSimulationMode(_ on: Bool) { AppCoordinator._testSimulationMode = on }
+
+    /// Expose conversion toggle state for tests.
+    var testConversionOn: Bool { conversionOn }
 
     // Unicode-aware helper returning the range of the last word in `text`.
     // Supports Unicode letters including Cyrillic.

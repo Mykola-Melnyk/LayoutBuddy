@@ -198,6 +198,24 @@ struct LayoutBuddyTests {
         #expect(app.testDocumentText == "еру best cat")
     }
 
+    @Test func testShortcutTogglesConversion() throws {
+        let app = AppCoordinator()
+        #expect(app.testConversionOn)
+
+        let keyCode: CGKeyCode = 29 // kVK_ANSI_0
+        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true) else {
+            #expect(Bool(false), "Unable to create CGEvent for testing")
+            return
+        }
+        event.flags = CGEventFlags([.maskCommand, .maskControl, .maskAlternate])
+
+        _ = app.testHandleKeyEvent(type: .keyDown, event: event)
+        #expect(!app.testConversionOn)
+
+        _ = app.testHandleKeyEvent(type: .keyDown, event: event)
+        #expect(app.testConversionOn)
+    }
+
     @Test func testUAWordFollowedByExclamation_ConvertsAndKeepsPunctuation() throws {
         let app = AppCoordinator()
         app.testSetSimulationMode(true)

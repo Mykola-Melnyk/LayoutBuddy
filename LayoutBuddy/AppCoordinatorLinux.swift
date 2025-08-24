@@ -70,6 +70,7 @@ public let kVK_ForwardDelete: Int32 = 117
 public final class AppCoordinator {
     private var wordParser = WordParser()
     private var inEmail = false
+    private var conversionOn = true
     private var isSynthesizing = false {
         didSet { if !isSynthesizing { flushQueuedEvents() } }
     }
@@ -121,7 +122,18 @@ public final class AppCoordinator {
 
         let flags = event.flags
         let hasAlt = flags.contains(.maskAlternate)
+        let hasCmd = flags.contains(.maskCommand)
+        let hasCtrl = flags.contains(.maskControl)
         let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+
+        if hasCmd && hasCtrl && hasAlt && keyCode == CGKeyCode(29) {
+            conversionOn.toggle()
+            return nil
+        }
+
+        if hasAlt && !hasCmd && !hasCtrl { return Unmanaged.passUnretained(event) }
+
+        if !conversionOn { return Unmanaged.passUnretained(event) }
 
         if keyCode == CGKeyCode(kVK_Delete) || keyCode == CGKeyCode(kVK_ForwardDelete) {
             if hasAlt {
@@ -199,6 +211,7 @@ public final class AppCoordinator {
     }
 
     // MARK: - Testing helpers
+    public var testConversionOn: Bool { conversionOn }
     public var testWordBuffer: String {
         get { wordParser.test_getBuffer() }
         set { wordParser.test_setBuffer(newValue) }

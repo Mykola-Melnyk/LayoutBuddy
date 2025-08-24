@@ -46,7 +46,7 @@ final class MenuBarController: NSObject {
     private func setupStatusItem() {
         statusItem.button?.target = self
         statusItem.button?.action = #selector(statusItemClicked(_:))
-        statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        statusItem.button?.sendAction(on: [.rightMouseUp])
 
         updateIcon()
         rebuildMenu()
@@ -69,7 +69,7 @@ final class MenuBarController: NSObject {
     func rebuildMenu() {
         let menu = NSMenu()
 
-        let toggleTitle = isConversionOn ? "Conversion ON" : "Conversion OFF"
+        let toggleTitle = isConversionOn ? "Turn conversion OFF" : "Turn conversion ON"
         let toggleItem = NSMenuItem(title: toggleTitle, action: #selector(toggleConversionMenu), keyEquivalent: "0")
         toggleItem.keyEquivalentModifierMask = [.control, .option, .command]
         toggleItem.target = self
@@ -80,6 +80,7 @@ final class MenuBarController: NSObject {
         menu.addItem(quitItem)
 
         self.menu = menu
+        statusItem.menu = menu
     }
 
     @objc private func setAsPrimary(_ sender: NSMenuItem) {
@@ -103,14 +104,8 @@ final class MenuBarController: NSObject {
     }
 
     @objc private func statusItemClicked(_ sender: Any?) {
-        guard let event = NSApp.currentEvent else { return }
-        if event.type == .rightMouseUp {
-            onToggleConversion?()
-        } else if event.type == .leftMouseUp {
-            if let menu = menu {
-                statusItem.popUpMenu(menu)
-            }
-        }
+        statusItem.menu = nil
+        onToggleConversion?()
     }
 
     func setConversion(on: Bool) {
