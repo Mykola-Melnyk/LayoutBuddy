@@ -297,7 +297,7 @@ final class AppCoordinator: NSObject {
         guard let curSpell = bestSpellLang(for: curLangPrefix),
               let otherSpell = bestSpellLang(for: otherLangPrefix) else {
             dlog("[PROC] reset buffer")
-            wordParser.clear(); return
+            wordParser.clear(); return false
         }
 
         // Single-letter policy
