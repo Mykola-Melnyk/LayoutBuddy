@@ -1,4 +1,5 @@
 import SwiftUI
+import ServiceManagement
 
 struct SettingsView: View {
     var body: some View {
@@ -14,8 +15,21 @@ struct SettingsView: View {
 }
 
 private struct GeneralSettingsView: View {
+    @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
+
     var body: some View {
-        Text("General settings will appear here.")
+        VStack(alignment: .leading) {
+            Toggle("Launch LayoutBuddy at login", isOn: $launchAtLogin)
+                .toggleStyle(.checkbox)
+                .onChange(of: launchAtLogin) { enabled in
+                    if enabled {
+                        try? SMAppService.mainApp.register()
+                    } else {
+                        SMAppService.mainApp.unregister()
+                    }
+                }
+            Spacer()
+        }
     }
 }
 
