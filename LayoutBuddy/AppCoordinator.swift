@@ -340,11 +340,21 @@ self?.settingsWindow = nil
         }
 
         if isWordBoundaryOrPunctuation(scalar) {
-            let eventCopy = event.copy()
+            let isReturn = keyCode == CGKeyCode(kVK_Return) || keyCode == CGKeyCode(kVK_ANSI_KeypadEnter)
+            let isTab    = keyCode == CGKeyCode(kVK_Tab)
+            let isEsc    = keyCode == CGKeyCode(kVK_Escape)
+            let specialBoundary = isReturn || isTab || isEsc
+
+            let eventCopy = specialBoundary ? nil : event.copy()
             dlog("[KEY] boundary before process buffer=\(wordParser.buffer) scalar=\(scalar)")
-            let replaced = processBufferedWordIfNeeded(boundaryEvent: eventCopy)
+            let replaced = processBufferedWordIfNeeded(keepFollowingBoundary: specialBoundary, boundaryEvent: eventCopy)
             dlog("[KEY] boundary after process buffer=\(wordParser.buffer)")
             bumpWordsAhead()
+
+            if specialBoundary {
+                return Unmanaged.passUnretained(event)
+            }
+
             if !replaced {
                 if isRunningUnitTests || testSimulationMode {
                     return Unmanaged.passUnretained(event)
