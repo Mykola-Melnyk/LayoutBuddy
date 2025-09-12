@@ -10,7 +10,7 @@ struct SettingsView: View {
                 .tabItem { Text("Shortcuts") }
         }
         .padding(20)
-        .frame(width: 360)
+        .frame(width: 720)
     }
 }
 
@@ -39,6 +39,7 @@ private struct GeneralSettingsView: View {
 private struct ShortcutsSettingsView: View {
     @State private var toggleHotkey = LayoutPreferences().toggleHotkey
     @State private var convertHotkey = LayoutPreferences().convertHotkey
+    @State private var forceCorrectHotkey = LayoutPreferences().forceCorrectHotkey
     private let prefs = LayoutPreferences()
 
     var body: some View {
@@ -55,6 +56,12 @@ private struct ShortcutsSettingsView: View {
                 HotkeyRecorder(hotkey: $convertHotkey)
                     .frame(width: 160)
             }
+            HStack {
+                Text("Force-correct last word")
+                Spacer()
+                HotkeyRecorder(hotkey: $forceCorrectHotkey)
+                    .frame(width: 160)
+            }
             Spacer()
         }
         .onChange(of: toggleHotkey) { _, newValue in
@@ -62,6 +69,9 @@ private struct ShortcutsSettingsView: View {
         }
         .onChange(of: convertHotkey) { _, newValue in
             prefs.convertHotkey = newValue
+        }
+        .onChange(of: forceCorrectHotkey) { _, newValue in
+            prefs.forceCorrectHotkey = newValue
         }
     }
 }

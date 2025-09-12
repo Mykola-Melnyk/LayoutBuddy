@@ -50,6 +50,7 @@ final class LayoutPreferences {
     // MARK: - Hotkeys
     private let kToggleHotkeyKey = "ToggleConversionHotkey"
     private let kConvertHotkeyKey = "ConvertLastHotkey"
+    private let kForceCorrectHotkeyKey = "ForceCorrectLastWordHotkey"
 
     var toggleHotkey: Hotkey {
         get {
@@ -85,6 +86,25 @@ final class LayoutPreferences {
         set {
             if let data = try? JSONEncoder().encode(newValue) {
                 defaults.set(data, forKey: kConvertHotkeyKey)
+            }
+        }
+    }
+
+    var forceCorrectHotkey: Hotkey {
+        get {
+            if let data = defaults.data(forKey: kForceCorrectHotkeyKey),
+               let hk = try? JSONDecoder().decode(Hotkey.self, from: data) {
+                return hk
+            }
+            return Hotkey(
+                keyCode: CGKeyCode(kVK_ANSI_F),
+                modifiers: [.control, .option, .command],
+                display: "⌃⌥⌘F"
+            )
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: kForceCorrectHotkeyKey)
             }
         }
     }

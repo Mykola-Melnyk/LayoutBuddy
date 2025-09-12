@@ -10,6 +10,7 @@ final class MenuBarController: NSObject {
     var onQuit: (() -> Void)?
     var onToggleConversion: (() -> Void)?
     var onOpenSettings: (() -> Void)?
+    var onForceCorrectLastWord: (() -> Void)?
 
     private var menu: NSMenu?
     private var isConversionOn = true
@@ -85,6 +86,12 @@ final class MenuBarController: NSObject {
             toggleItem.target = self
             menu.addItem(toggleItem)
 
+            // Force-correct last word action (show default shortcut hint in title)
+            let forceTitle = "Force-correct last word (⌃⌥⌘F)"
+            let forceItem = NSMenuItem(title: forceTitle, action: #selector(forceCorrectLastWord), keyEquivalent: "")
+            forceItem.target = self
+            menu.addItem(forceItem)
+
             let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
             settingsItem.keyEquivalentModifierMask = [.command]
             settingsItem.target = self
@@ -126,6 +133,10 @@ final class MenuBarController: NSObject {
 
     @objc private func openSettings() {
         onOpenSettings?()
+    }
+
+    @objc private func forceCorrectLastWord() {
+        onForceCorrectLastWord?()
     }
 
     @objc private func statusItemClicked(_ sender: Any?) {

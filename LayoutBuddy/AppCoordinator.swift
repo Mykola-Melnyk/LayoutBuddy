@@ -131,6 +131,10 @@ final class AppCoordinator: NSObject {
             self?.openSettingsWindow()
         }
 
+        menuBar.onForceCorrectLastWord = { [weak self] in
+            self?.forceCorrectLastWord()
+        }
+
         menuBar.setConversion(on: conversionOn)
     }
 
@@ -278,6 +282,15 @@ self?.settingsWindow = nil
             } else {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: work)
             }
+            return nil
+        }
+
+        // Force-correct last word hotkey
+        let forceHK = preferences.forceCorrectHotkey
+        if keyCode == forceHK.keyCode && filtered == forceHK.modifiers {
+            let work = { [self] in self.forceCorrectLastWord() }
+            if isRunningUnitTests || testSimulationMode { work() }
+            else { DispatchQueue.main.async(execute: work) }
             return nil
         }
 
@@ -482,6 +495,78 @@ self?.settingsWindow = nil
 
     private func isAllCyrillic(_ s: String) -> Bool {
         s.unicodeScalars.allSatisfy { wordParser.isCyrillicLetter($0) }
+    }
+
+    // MARK: - Force-correct last word action
+
+    private func forceCorrectLastWord() {
+        // Determine current and target language prefixes
+        let curID = layoutManager.currentInputSourceID()
+        let curLangPrefix: String = isLayoutUkrainian(curID) ? "uk" : "en"
+        let targetLangPrefix: String = (curLangPrefix == "en") ? "uk" : "en"
+
+        // If we are in the middle of typing a word, prefer using the in-memory buffer
+        // to avoid relying on Accessibility APIs.
+        if !wordParser.buffer.isEmpty {
+            let core = wordParser.buffer
+            let converted = convert(core, from: curLangPrefix, to: targetLangPrefix)
+            // Use navigation-based replacement to avoid timing issues with backspaces.
+            let cand = AmbiguousCandidate(
+                element: nil,
+                pid: NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0,
+                range: nil,
+                original: core,
+                converted: converted,
+                before: "",
+                after: "",
+                when: CFAbsoluteTimeGetCurrent(),
+                targetLangPrefix: targetLangPrefix,
+                keystrokeOnly: true,
+                wordsAhead: 0
+            )
+            wordParser.clear()
+            fallbackNavigateAndReplace(cand)
+            return
+        }
+
+        #if DEBUG
+        if isRunningUnitTests || testSimulationMode {
+            if let r = lastWordRange(in: testDocumentText) {
+                let word = String(testDocumentText[r])
+                let converted = convert(word, from: curLangPrefix, to: targetLangPrefix)
+                testDocumentText.replaceSubrange(r, with: converted)
+            }
+            playSwitchSound(); menuBar.updateStatusTitleAndColor()
+            return
+        }
+        #endif
+
+        // Fallback path without relying on Accessibility:
+        // select the last word via Option navigation, copy it, convert, then replace selection.
+        DispatchQueue.main.async {
+            self.isSynthesizing = true
+            self.optLeft()
+            self.shiftOptRight()
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            self.tapKeyWithFlags(CGKeyCode(kVK_ANSI_C), flags: .maskCommand)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                let original = pb.string(forType: .string) ?? ""
+                guard !original.isEmpty else { self.isSynthesizing = false; self.playSwitchSound(); return }
+                let converted = self.convert(original, from: curLangPrefix, to: targetLangPrefix)
+                // Replace the current selection
+                self.sendBackspace(times: 1)
+                let targetID = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
+                self.ensureSwitch(to: targetID) {
+                    self.typeUnicode(converted)
+                    // Restore caret position after trailing boundary (e.g., space)
+                    self.optRight()
+                    self.menuBar.updateStatusTitleAndColor()
+                    self.playSwitchSound()
+                    self.isSynthesizing = false
+                }
+            }
+        }
     }
 
     // MARK: - Immediate auto-fix (simulate keys)
