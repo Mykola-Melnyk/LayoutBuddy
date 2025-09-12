@@ -3,6 +3,7 @@ import Cocoa
 /// Handles status item and menu bar interactions.
 final class MenuBarController: NSObject {
     private let layoutManager: KeyboardLayoutManager
+    private let preferences: LayoutPreferences
     private let statusItem: NSStatusItem
 
     var onSetAsPrimary: ((String) -> Void)?
@@ -15,8 +16,9 @@ final class MenuBarController: NSObject {
     private var menu: NSMenu?
     private var isConversionOn = true
 
-    init(layoutManager: KeyboardLayoutManager) {
+    init(layoutManager: KeyboardLayoutManager, preferences: LayoutPreferences) {
         self.layoutManager = layoutManager
+        self.preferences = preferences
 
         // NSStatusItem (and the underlying window it uses) must be
         // created on the main thread. In tests or other contexts this
@@ -53,6 +55,11 @@ final class MenuBarController: NSObject {
         updateIcon()
         rebuildMenu()
         updateStatusTitleAndColor()
+
+        // Reflect changes to hotkey preferences dynamically.
+        NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.rebuildMenu()
+        }
     }
 
     private func updateIcon() {
@@ -80,16 +87,17 @@ final class MenuBarController: NSObject {
         let build = { [self] in
             let menu = NSMenu()
 
-            let toggleTitle = isConversionOn ? "Turn conversion OFF" : "Turn conversion ON"
-            let toggleItem = NSMenuItem(title: toggleTitle, action: #selector(toggleConversionMenu), keyEquivalent: "0")
-            toggleItem.keyEquivalentModifierMask = [.control, .option, .command]
+            // Toggle conversion item with native key equivalent hint on the right
+            let toggleBase = isConversionOn ? "Turn conversion OFF" : "Turn conversion ON"
+            let toggleItem = NSMenuItem(title: toggleBase, action: #selector(toggleConversionMenu), keyEquivalent: "")
             toggleItem.target = self
+            applyKeyEquivalent(toggleItem, from: preferences.toggleHotkey)
             menu.addItem(toggleItem)
 
-            // Force-correct last word action (show default shortcut hint in title)
-            let forceTitle = "Force-correct last word (⌃⌥⌘F)"
-            let forceItem = NSMenuItem(title: forceTitle, action: #selector(forceCorrectLastWord), keyEquivalent: "")
+            // Force-correct last word with native key equivalent hint on the right
+            let forceItem = NSMenuItem(title: "Force-correct last word", action: #selector(forceCorrectLastWord), keyEquivalent: "")
             forceItem.target = self
+            applyKeyEquivalent(forceItem, from: preferences.forceCorrectHotkey)
             menu.addItem(forceItem)
 
             let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
@@ -108,6 +116,24 @@ final class MenuBarController: NSObject {
             build()
         } else {
             DispatchQueue.main.sync(execute: build)
+        }
+    }
+
+    /// Apply an NSMenuItem key equivalent based on a Hotkey, to show a native
+    /// right-aligned, dimmed shortcut hint without hardcoding.
+    private func applyKeyEquivalent(_ item: NSMenuItem, from hotkey: Hotkey) {
+        item.keyEquivalentModifierMask = hotkey.modifiers
+        // Derive the base key from the display string (e.g., "⌃⌥⌘F" or "⌃⌥Space").
+        let mods: Set<Character> = ["⌃", "⌥", "⌘", "⇧"]
+        let remainder = hotkey.display.filter { !mods.contains($0) }
+        if remainder == "Space" {
+            item.keyEquivalent = " "
+        } else if remainder.count == 1, let ch = remainder.first {
+            item.keyEquivalent = String(ch).lowercased()
+        } else {
+            // Unknown or multi-char token (e.g., unsupported capture) → no key eq.
+            item.keyEquivalent = ""
+            item.keyEquivalentModifierMask = []
         }
     }
 

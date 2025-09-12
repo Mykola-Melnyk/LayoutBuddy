@@ -95,7 +95,7 @@ final class AppCoordinator: NSObject {
     init(preferences: LayoutPreferences = LayoutPreferences()) {
         self.preferences = preferences
         self.layoutManager = KeyboardLayoutManager(preferences: preferences)
-        self.menuBar = MenuBarController(layoutManager: layoutManager)
+        self.menuBar = MenuBarController(layoutManager: layoutManager, preferences: preferences)
         super.init()
 
         eventTapController.delegate = self
