@@ -13,7 +13,10 @@ struct HotkeyRecorder: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: HotkeyField, context: Context) {
-        nsView.stringValue = hotkey.display
+        let display = hotkey.display
+        if nsView.stringValue != display {
+            nsView.stringValue = display
+        }
     }
 
     final class HotkeyField: NSTextField {
@@ -23,11 +26,14 @@ struct HotkeyRecorder: NSViewRepresentable {
 
         override init(frame frameRect: NSRect) {
             super.init(frame: frameRect)
+            translatesAutoresizingMaskIntoConstraints = false
             isEditable = false
             isBezeled = true
             alignment = .center
             font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
             stringValue = ""
+            setContentHuggingPriority(.required, for: .horizontal)
+            setContentCompressionResistancePriority(.required, for: .horizontal)
         }
 
         required init?(coder: NSCoder) {

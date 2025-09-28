@@ -4,7 +4,8 @@ import Cocoa
 final class MenuBarController: NSObject {
     private let layoutManager: KeyboardLayoutManager
     private let preferences: LayoutPreferences
-    private let statusItem: NSStatusItem
+    private let statusItem: NSStatusItem?
+    private let installsStatusItem: Bool
 
     var onSetAsPrimary: ((String) -> Void)?
     var onSetAsSecondary: ((String) -> Void)?
@@ -19,20 +20,28 @@ final class MenuBarController: NSObject {
     init(layoutManager: KeyboardLayoutManager, preferences: LayoutPreferences) {
         self.layoutManager = layoutManager
         self.preferences = preferences
-
-        // NSStatusItem (and the underlying window it uses) must be
-        // created on the main thread. In tests or other contexts this
-        // initializer might be invoked from a background queue, so make
-        // sure the status item creation always happens on the main thread.
-        self.statusItem = Self.createStatusItem()
+        let runningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        self.installsStatusItem = !runningTests
+        if runningTests {
+            self.statusItem = nil
+        } else {
+            // NSStatusItem (and the underlying window it uses) must be
+            // created on the main thread. In tests or other contexts this
+            // initializer might be invoked from a background queue, so make
+            // sure the status item creation always happens on the main thread.
+            self.statusItem = Self.createStatusItem()
+        }
         super.init()
 
+        guard installsStatusItem else { return }
+
         // Further UI setup must also run on the main thread.
+        let performSetup = { [weak self] in self?.setupStatusItem() }
         if Thread.isMainThread {
-            setupStatusItem()
+            performSetup()
         } else {
-            DispatchQueue.main.async { [weak self] in
-                self?.setupStatusItem()
+            DispatchQueue.main.async {
+                performSetup()
             }
         }
     }
@@ -48,6 +57,8 @@ final class MenuBarController: NSObject {
     }
 
     private func setupStatusItem() {
+        guard let statusItem = statusItem else { return }
+
         statusItem.button?.target = self
         statusItem.button?.action = #selector(statusItemClicked(_:))
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -63,7 +74,9 @@ final class MenuBarController: NSObject {
     }
 
     private func updateIcon() {
+        guard installsStatusItem else { return }
         let work = { [self] in
+            guard let statusItem = statusItem else { return }
             let symbol = isConversionOn ? "infinity" : "infinity.circle.fill"
             if let img = NSImage(systemSymbolName: symbol, accessibilityDescription: "LayoutBuddy") {
                 img.isTemplate = true // adopt menu bar tint (auto light/dark)
@@ -166,6 +179,7 @@ final class MenuBarController: NSObject {
     }
 
     @objc private func statusItemClicked(_ sender: Any?) {
+        guard installsStatusItem, let statusItem = statusItem else { return }
         guard let event = NSApp.currentEvent else { return }
         if event.type == .rightMouseUp {
             onToggleConversion?()
@@ -177,12 +191,15 @@ final class MenuBarController: NSObject {
     func setConversion(on: Bool) {
         isConversionOn = on
         updateIcon()
-        rebuildMenu()
+        if installsStatusItem {
+            rebuildMenu()
+        }
     }
 
     func updateStatusTitleAndColor() {
+        guard installsStatusItem else { return }
         let update = { [self] in
-            guard let button = statusItem.button else { return }
+            guard let button = statusItem?.button else { return }
             // No text label in the menubar:
             button.title = ""
             button.attributedTitle = NSAttributedString(string: "")
