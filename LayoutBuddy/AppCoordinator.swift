@@ -369,12 +369,7 @@ self?.settingsWindow = nil
             }
 
             if !replaced {
-                if isRunningUnitTests || testSimulationMode {
-                    return Unmanaged.passUnretained(event)
-                } else {
-                    eventCopy?.post(tap: .cgAnnotatedSessionEventTap)
-                    return nil
-                }
+                return Unmanaged.passUnretained(event)
             }
             return nil
         }
