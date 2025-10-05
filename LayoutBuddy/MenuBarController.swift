@@ -13,6 +13,7 @@ final class MenuBarController: NSObject {
     var onToggleConversion: (() -> Void)?
     var onOpenSettings: (() -> Void)?
     var onForceCorrectLastWord: (() -> Void)?
+    var onCorrectLastAmbiguousWord: (() -> Void)?
 
     private var menu: NSMenu?
     private var isConversionOn = true
@@ -107,6 +108,12 @@ final class MenuBarController: NSObject {
             applyKeyEquivalent(toggleItem, from: preferences.toggleHotkey)
             menu.addItem(toggleItem)
 
+            // Convert last ambiguous word with native key equivalent hint on the right
+            let convertItem = NSMenuItem(title: "Convert last ambiguous word", action: #selector(convertLastAmbiguousWord), keyEquivalent: "")
+            convertItem.target = self
+            applyKeyEquivalent(convertItem, from: preferences.convertHotkey)
+            menu.addItem(convertItem)
+
             // Force-correct last word with native key equivalent hint on the right
             let forceItem = NSMenuItem(title: "Force-correct last word", action: #selector(forceCorrectLastWord), keyEquivalent: "")
             forceItem.target = self
@@ -176,6 +183,10 @@ final class MenuBarController: NSObject {
 
     @objc private func forceCorrectLastWord() {
         onForceCorrectLastWord?()
+    }
+
+    @objc private func convertLastAmbiguousWord() {
+        onCorrectLastAmbiguousWord?()
     }
 
     @objc private func statusItemClicked(_ sender: Any?) {

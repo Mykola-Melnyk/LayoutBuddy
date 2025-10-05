@@ -135,6 +135,10 @@ final class AppCoordinator: NSObject {
             self?.forceCorrectLastWord()
         }
 
+        menuBar.onCorrectLastAmbiguousWord = { [weak self] in
+            self?.correctLastAmbiguousWord()
+        }
+
         menuBar.setConversion(on: conversionOn)
     }
 
@@ -270,13 +274,7 @@ self?.settingsWindow = nil
         let convertHK = preferences.convertHotkey
         if keyCode == convertHK.keyCode && filtered == convertHK.modifiers {
             dlog("[HOTKEY] pressed — stack=\(ambiguityStack.count)")
-            let work = { [self] in
-                if !ambiguityStack.isEmpty {
-                    self.applyMostRecentAmbiguityAndRestoreCaret()
-                } else {
-                    NSSound.beep()
-                }
-            }
+            let work = { [self] in self.correctLastAmbiguousWord() }
             if isRunningUnitTests || testSimulationMode {
                 work()
             } else {
@@ -492,7 +490,15 @@ self?.settingsWindow = nil
         s.unicodeScalars.allSatisfy { wordParser.isCyrillicLetter($0) }
     }
 
-    // MARK: - Force-correct last word action
+    // MARK: - Ambiguity actions
+
+    private func correctLastAmbiguousWord() {
+        if ambiguityStack.isEmpty {
+            NSSound.beep()
+            return
+        }
+        applyMostRecentAmbiguityAndRestoreCaret()
+    }
 
     private func forceCorrectLastWord() {
         // Determine current and target language prefixes
