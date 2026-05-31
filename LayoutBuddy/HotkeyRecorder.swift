@@ -60,6 +60,17 @@ struct HotkeyRecorder: NSViewRepresentable {
         override func keyDown(with event: NSEvent) {
             guard recording else { return }
             let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            if event.keyCode == 53 {
+                recording = false
+                stringValue = originalDisplay
+                window?.makeFirstResponder(nil)
+                return
+            }
+            guard Self.hasEnoughModifiers(mods) else {
+                NSSound.beep()
+                stringValue = "Use 2 modifiers"
+                return
+            }
             guard let chars = event.charactersIgnoringModifiers, !chars.isEmpty else { return }
             let keyString = chars == " " ? "Space" : chars.uppercased()
             let display = Self.format(mods: mods) + keyString
@@ -67,6 +78,14 @@ struct HotkeyRecorder: NSViewRepresentable {
             recording = false
             window?.makeFirstResponder(nil)
             onChange(Hotkey(keyCode: event.keyCode, modifiers: mods, display: display))
+        }
+
+        private static func hasEnoughModifiers(_ mods: NSEvent.ModifierFlags) -> Bool {
+            let required = [NSEvent.ModifierFlags.command, .option, .control]
+            let count = required.reduce(0) { partial, flag in
+                partial + (mods.contains(flag) ? 1 : 0)
+            }
+            return count >= 2
         }
 
         private static func format(mods: NSEvent.ModifierFlags) -> String {

@@ -40,6 +40,7 @@ private struct ShortcutsSettingsView: View {
     @State private var toggleHotkey = LayoutPreferences().toggleHotkey
     @State private var convertHotkey = LayoutPreferences().convertHotkey
     @State private var forceCorrectHotkey = LayoutPreferences().forceCorrectHotkey
+    @State private var undoCorrectionHotkey = LayoutPreferences().undoCorrectionHotkey
     private let prefs = LayoutPreferences()
 
     var body: some View {
@@ -62,6 +63,12 @@ private struct ShortcutsSettingsView: View {
                 HotkeyRecorder(hotkey: $forceCorrectHotkey)
                     .frame(width: 160)
             }
+            HStack {
+                Text("Undo last correction")
+                Spacer()
+                HotkeyRecorder(hotkey: $undoCorrectionHotkey)
+                    .frame(width: 160)
+            }
             Spacer()
         }
         .onChange(of: toggleHotkey) { _, newValue in
@@ -72,6 +79,9 @@ private struct ShortcutsSettingsView: View {
         }
         .onChange(of: forceCorrectHotkey) { _, newValue in
             prefs.forceCorrectHotkey = newValue
+        }
+        .onChange(of: undoCorrectionHotkey) { _, newValue in
+            prefs.undoCorrectionHotkey = newValue
         }
     }
 }

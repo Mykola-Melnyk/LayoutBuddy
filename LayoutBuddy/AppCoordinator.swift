@@ -38,7 +38,7 @@ final class AppCoordinator: NSObject {
     private var conversionOn = true
     
     // Toggle diagnostics here
-    private let enableDiagnostics = true
+    private let enableDiagnostics = false
 
     @inline(__always)
     private func dlog(_ msg: @autoclosure () -> String) {
@@ -50,6 +50,7 @@ final class AppCoordinator: NSObject {
 
     // Global key listener
     private let eventTapController = EventTapController()
+    private let syntheticEventUserData: Int64 = 0x4C42_5359_4E54 // "LBSYNT"
     private var isSynthesizing = false {
         didSet { if !isSynthesizing { flushQueuedEvents() } }
     }
@@ -58,12 +59,45 @@ final class AppCoordinator: NSObject {
     // When running unit tests, avoid posting real keyboard events to the session.
     private let isRunningUnitTests: Bool = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
+    private struct PasteboardSnapshot {
+        private let items: [[NSPasteboard.PasteboardType: Data]]
+
+        init(from pasteboard: NSPasteboard) {
+            self.items = pasteboard.pasteboardItems?.map { item in
+                var dataByType: [NSPasteboard.PasteboardType: Data] = [:]
+                for type in item.types {
+                    if let data = item.data(forType: type) {
+                        dataByType[type] = data
+                    }
+                }
+                return dataByType
+            } ?? []
+        }
+
+        func restore(to pasteboard: NSPasteboard) {
+            pasteboard.clearContents()
+            let restoredItems = items.map { dataByType -> NSPasteboardItem in
+                let item = NSPasteboardItem()
+                for (type, data) in dataByType {
+                    item.setData(data, forType: type)
+                }
+                return item
+            }
+            if !restoredItems.isEmpty {
+                pasteboard.writeObjects(restoredItems)
+            }
+        }
+    }
+
     // Simulation support for unit tests
     private static var _testSimulationMode = false
     private var testSimulationMode: Bool { AppCoordinator._testSimulationMode }
 
     // Captured document text during tests
     var testDocumentText: String = ""
+    #if DEBUG
+    private var testEditingInsideWordBeforeInput = false
+    #endif
 
     // Word tracking
     private var wordParser = WordParser()
@@ -89,6 +123,20 @@ final class AppCoordinator: NSObject {
     private var ambiguityStack: [AmbiguousCandidate] = []
     private let ambiguityMax = 5
     private let contextRadius = 8
+
+    private struct CorrectionUndo {
+        let element: AXUIElement?
+        let pid: pid_t
+        let range: CFRange?
+        let original: String
+        let corrected: String
+        let before: String
+        let after: String
+        let restoreLangPrefix: String
+        let keystrokeOnly: Bool
+        var wordsAhead: Int = 0
+    }
+    private var lastCorrectionUndo: CorrectionUndo?
 
     // MARK: - App lifecycle
 
@@ -139,13 +187,19 @@ final class AppCoordinator: NSObject {
             self?.correctLastAmbiguousWord()
         }
 
+        menuBar.onUndoLastCorrection = { [weak self] in
+            self?.undoLastCorrection()
+        }
+
         menuBar.setConversion(on: conversionOn)
     }
 
     func start() {
         NSApp.setActivationPolicy(.accessory)
         menuBar.updateStatusTitleAndColor()
-        eventTapController.start()
+        if !eventTapController.start() {
+            dlog("[EVENT TAP] failed to start; check Input Monitoring and Accessibility permissions")
+        }
     }
 
     func stop() {
@@ -174,7 +228,7 @@ final class AppCoordinator: NSObject {
             window.isReleasedWhenClosed = false
 
             NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
-self?.settingsWindow = nil
+                self?.settingsWindow = nil
                 self?.eventTapController.start()
             }
 
@@ -248,6 +302,10 @@ self?.settingsWindow = nil
     // MARK: - Key handling
 
     private func handleKeyEvent(_ event: CGEvent) -> Unmanaged<CGEvent>? {
+        if isSyntheticEvent(event) {
+            return Unmanaged.passUnretained(event)
+        }
+
         if isSynthesizing {
             if let copy = event.copy() { enqueueQueuedEvent(copy) }
             return nil
@@ -292,6 +350,19 @@ self?.settingsWindow = nil
             return nil
         }
 
+        let undoHK = preferences.undoCorrectionHotkey
+        if keyCode == undoHK.keyCode && filtered == undoHK.modifiers {
+            let work = { [self] in self.undoLastCorrection() }
+            if isRunningUnitTests || testSimulationMode { work() }
+            else { DispatchQueue.main.async(execute: work) }
+            return nil
+        }
+
+        if isCaretNavigationKey(keyCode) {
+            resetTypingStateAfterCaretMove()
+            return Unmanaged.passUnretained(event)
+        }
+
         // Ignore plain Option combos to avoid interfering with system shortcuts
         if hasAlt && !hasCmd && !hasCtrl { return Unmanaged.passUnretained(event) }
 
@@ -302,8 +373,8 @@ self?.settingsWindow = nil
 
         // Backspace/delete edits the current word buffer without triggering processing
         if keyCode == CGKeyCode(kVK_Delete) || keyCode == CGKeyCode(kVK_ForwardDelete) {
-            if hasAlt {
-                wordParser.clear()
+            if hasAlt || keyCode == CGKeyCode(kVK_ForwardDelete) || isEditingInsideWordBeforeInput() {
+                resetTypingStateAfterCaretMove()
             } else if !wordParser.buffer.isEmpty {
                 wordParser.removeLast()
             }
@@ -315,6 +386,11 @@ self?.settingsWindow = nil
         }
 
         dlog("[KEY] decoded scalar=\(scalar) buffer=\(wordParser.buffer)")
+
+        if !wordParser.buffer.isEmpty, isEditingInsideWordBeforeInput() {
+            resetTypingStateAfterCaretMove()
+            return Unmanaged.passUnretained(event)
+        }
 
         if inEmail {
             if CharacterSet.whitespacesAndNewlines.contains(scalar) {
@@ -377,11 +453,51 @@ self?.settingsWindow = nil
         return Unmanaged.passUnretained(event)
     }
 
+    private func isCaretNavigationKey(_ keyCode: CGKeyCode) -> Bool {
+        switch Int(keyCode) {
+        case kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow,
+             kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func resetTypingStateAfterCaretMove() {
+        wordParser.clear()
+        inEmail = false
+        ambiguityStack.removeAll { $0.keystrokeOnly }
+        if lastCorrectionUndo?.keystrokeOnly == true {
+            lastCorrectionUndo = nil
+        }
+    }
+
+    private func isEditingInsideWordBeforeInput() -> Bool {
+        #if DEBUG
+        if testSimulationMode { return testEditingInsideWordBeforeInput }
+        #endif
+
+        guard let el = axFocusedElement(),
+              let caret = axSelectedRange(el) else {
+            return false
+        }
+
+        if caret.length > 0 { return true }
+        guard caret.location >= 0 else { return false }
+
+        let nextRange = CFRange(location: caret.location, length: 1)
+        guard let next = axStringForRange(el, nextRange) else { return false }
+        return next.unicodeScalars.contains { lbLetters.contains($0) }
+    }
+
     // After each word boundary, everything on the stack moves one word “further back”
     private func bumpWordsAhead() {
         DispatchQueue.main.async {
             for i in self.ambiguityStack.indices {
                 self.ambiguityStack[i].wordsAhead += 1
+            }
+            if self.lastCorrectionUndo != nil {
+                self.lastCorrectionUndo?.wordsAhead += 1
             }
         }
     }
@@ -441,7 +557,7 @@ self?.settingsWindow = nil
                 dlog("[PROC] reset buffer")
                 wordParser.clear(); return false
             } else if !curOK && otherOK {
-                replaceLastWord(with: converted1, targetLangPrefix: otherLangPrefix,
+                replaceLastWord(original: core, with: converted1, restoreLangPrefix: curLangPrefix, targetLangPrefix: otherLangPrefix,
                                 keepFollowingBoundary: keepFollowingBoundary, boundaryEvent: boundaryEvent, deleteCountOverride: core.count)
                 playSwitchSound(); menuBar.updateStatusTitleAndColor()
                 dlog("[PROC] reset buffer")
@@ -474,7 +590,7 @@ self?.settingsWindow = nil
         }
 
         if shouldReplace {
-            replaceLastWord(with: convertedCore, targetLangPrefix: otherLangPrefix,
+            replaceLastWord(original: core, with: convertedCore, restoreLangPrefix: curLangPrefix, targetLangPrefix: otherLangPrefix,
                             keepFollowingBoundary: keepFollowingBoundary, boundaryEvent: boundaryEvent, deleteCountOverride: core.count)
             playSwitchSound(); menuBar.updateStatusTitleAndColor()
             dlog("[PROC] reset buffer")
@@ -490,14 +606,87 @@ self?.settingsWindow = nil
         s.unicodeScalars.allSatisfy { wordParser.isCyrillicLetter($0) }
     }
 
+    private func oppositeLanguagePrefix(_ prefix: String) -> String {
+        prefix == "en" ? "uk" : "en"
+    }
+
+    private func rememberBlindUndo(original: String,
+                                   corrected: String,
+                                   restoreLangPrefix: String,
+                                   wordsAhead: Int = 0) {
+        guard !original.isEmpty, !corrected.isEmpty else { return }
+        lastCorrectionUndo = CorrectionUndo(
+            element: nil,
+            pid: NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0,
+            range: nil,
+            original: original,
+            corrected: corrected,
+            before: "",
+            after: "",
+            restoreLangPrefix: restoreLangPrefix,
+            keystrokeOnly: true,
+            wordsAhead: wordsAhead
+        )
+    }
+
+    private func rememberAXUndo(element: AXUIElement,
+                                range: NSRange,
+                                original: String,
+                                corrected: String,
+                                before: String,
+                                after: String,
+                                restoreLangPrefix: String) {
+        guard !original.isEmpty, !corrected.isEmpty else { return }
+        lastCorrectionUndo = CorrectionUndo(
+            element: element,
+            pid: axPID(element),
+            range: CFRange(location: range.location, length: range.length),
+            original: original,
+            corrected: corrected,
+            before: before,
+            after: after,
+            restoreLangPrefix: restoreLangPrefix,
+            keystrokeOnly: false,
+            wordsAhead: 0
+        )
+    }
+
     // MARK: - Ambiguity actions
 
     private func correctLastAmbiguousWord() {
         if ambiguityStack.isEmpty {
+            if lastCorrectionUndo != nil {
+                undoLastCorrection()
+                return
+            }
             NSSound.beep()
             return
         }
         applyMostRecentAmbiguityAndRestoreCaret()
+    }
+
+    private func undoLastCorrection() {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { self.undoLastCorrection() }
+            return
+        }
+
+        guard let undo = lastCorrectionUndo else {
+            NSSound.beep()
+            return
+        }
+        lastCorrectionUndo = nil
+
+        #if DEBUG
+        if isRunningUnitTests || testSimulationMode {
+            if !testSimulateUndoOnTestText(undo) { NSSound.beep() }
+            return
+        }
+        #endif
+
+        if undo.keystrokeOnly || !applyAXUndo(undo) {
+            fallbackNavigateAndUndo(undo)
+        }
     }
 
     private func forceCorrectLastWord() {
@@ -535,7 +724,9 @@ self?.settingsWindow = nil
             if let r = lastWordRange(in: testDocumentText) {
                 let word = String(testDocumentText[r])
                 let converted = convert(word, from: curLangPrefix, to: targetLangPrefix)
+                let original = String(testDocumentText[r])
                 testDocumentText.replaceSubrange(r, with: converted)
+                rememberBlindUndo(original: original, corrected: converted, restoreLangPrefix: curLangPrefix)
             }
             playSwitchSound(); menuBar.updateStatusTitleAndColor()
             return
@@ -549,10 +740,12 @@ self?.settingsWindow = nil
             self.optLeft()
             self.shiftOptRight()
             let pb = NSPasteboard.general
+            let clipboardSnapshot = PasteboardSnapshot(from: pb)
             pb.clearContents()
             self.tapKeyWithFlags(CGKeyCode(kVK_ANSI_C), flags: .maskCommand)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
                 let original = pb.string(forType: .string) ?? ""
+                clipboardSnapshot.restore(to: pb)
                 guard !original.isEmpty else { self.isSynthesizing = false; self.playSwitchSound(); return }
                 let converted = self.convert(original, from: curLangPrefix, to: targetLangPrefix)
                 // Replace the current selection
@@ -560,6 +753,7 @@ self?.settingsWindow = nil
                 let targetID = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
                 self.ensureSwitch(to: targetID) {
                     self.typeUnicode(converted)
+                    self.rememberBlindUndo(original: original, corrected: converted, restoreLangPrefix: curLangPrefix)
                     // Restore caret position after trailing boundary (e.g., space)
                     self.optRight()
                     self.menuBar.updateStatusTitleAndColor()
@@ -574,12 +768,15 @@ self?.settingsWindow = nil
 
     private enum SpecialKey { case leftArrow, rightArrow }
 
-    private func replaceLastWord(with newWord: String,
+    private func replaceLastWord(original oldWord: String,
+                                 with newWord: String,
+                                 restoreLangPrefix: String,
                                  targetLangPrefix: String,
                                   keepFollowingBoundary: Bool,
                                  boundaryEvent: CGEvent? = nil,
                                  deleteCountOverride: Int? = nil) {
         let deleteCount = deleteCountOverride ?? wordParser.buffer.count
+        let initialUndoWordsAhead = (keepFollowingBoundary || boundaryEvent != nil) ? -1 : 0
         #if DEBUG
         if isRunningUnitTests || testSimulationMode {
             let removeCount = min(deleteCount, testDocumentText.count)
@@ -588,6 +785,7 @@ self?.settingsWindow = nil
             if let s = boundaryEvent?.firstUnicodeScalar {
                 testDocumentText.unicodeScalars.append(s)
             }
+            rememberBlindUndo(original: oldWord, corrected: newWord, restoreLangPrefix: restoreLangPrefix, wordsAhead: initialUndoWordsAhead)
             return
         }
         #endif
@@ -606,7 +804,8 @@ self?.settingsWindow = nil
                 let targetID = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
                 self.ensureSwitch(to: targetID) {
                     self.typeUnicode(newWord)
-                    boundaryEvent?.post(tap: .cgAnnotatedSessionEventTap)
+                    self.postSynthetic(boundaryEvent)
+                    self.rememberBlindUndo(original: oldWord, corrected: newWord, restoreLangPrefix: restoreLangPrefix, wordsAhead: initialUndoWordsAhead)
                     if keepFollowingBoundary { self.tapKey(.rightArrow) }
                     self.menuBar.updateStatusTitleAndColor()
                     self.isSynthesizing = false
@@ -624,8 +823,8 @@ self?.settingsWindow = nil
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
         let vk = CGKeyCode(kVK_Delete)
         for _ in 0..<times {
-            CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: true)?.post(tap: .cgAnnotatedSessionEventTap)
-            CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: false)?.post(tap: .cgAnnotatedSessionEventTap)
+            postSynthetic(CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: true))
+            postSynthetic(CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: false))
         }
     }
 
@@ -639,10 +838,10 @@ self?.settingsWindow = nil
             var u = UniChar(scalar.value)
             let down = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true)
             down?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &u)
-            down?.post(tap: .cgAnnotatedSessionEventTap)
+            postSynthetic(down)
             let up = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false)
             up?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &u)
-            up?.post(tap: .cgAnnotatedSessionEventTap)
+            postSynthetic(up)
         }
     }
 
@@ -653,8 +852,8 @@ self?.settingsWindow = nil
         #endif
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
         let code: CGKeyCode = (key == .leftArrow) ? CGKeyCode(kVK_LeftArrow) : CGKeyCode(kVK_RightArrow)
-        CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: true)?.post(tap: .cgAnnotatedSessionEventTap)
-        CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: false)?.post(tap: .cgAnnotatedSessionEventTap)
+        postSynthetic(CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: true))
+        postSynthetic(CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: false))
     }
 
     private func tapKeyWithFlags(_ key: CGKeyCode, flags: CGEventFlags) {
@@ -665,10 +864,23 @@ self?.settingsWindow = nil
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
         let down = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: true)
         down?.flags = flags
-        down?.post(tap: .cgAnnotatedSessionEventTap)
+        postSynthetic(down)
         let up = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: false)
         up?.flags = flags
-        up?.post(tap: .cgAnnotatedSessionEventTap)
+        postSynthetic(up)
+    }
+
+    private func markSynthetic(_ event: CGEvent?) -> CGEvent? {
+        event?.setIntegerValueField(.eventSourceUserData, value: syntheticEventUserData)
+        return event
+    }
+
+    private func postSynthetic(_ event: CGEvent?) {
+        markSynthetic(event)?.post(tap: .cgAnnotatedSessionEventTap)
+    }
+
+    private func isSyntheticEvent(_ event: CGEvent) -> Bool {
+        event.getIntegerValueField(.eventSourceUserData) == syntheticEventUserData
     }
 
     private func optLeft()       { tapKeyWithFlags(CGKeyCode(kVK_LeftArrow),  flags: .maskAlternate) }
@@ -725,36 +937,8 @@ self?.settingsWindow = nil
     // MARK: - EN ⇄ UK keyboard-position mapping
 
     func convert(_ word: String, from src: String, to dst: String) -> String {
-        if src == "en", dst == "uk" { return mapWord(word, using: en2uk) }
-        if src == "uk", dst == "en" { return mapWord(word, using: uk2en) }
-        return word
+        KeyboardLayoutConverter.convert(word, from: src, to: dst)
     }
-
-    private func mapWord(_ word: String, using table: [Character: String]) -> String {
-        var out = ""
-        for ch in word {
-            let isUpper = ch.isUppercase
-            let lower = Character(ch.lowercased())
-            if let mapped = table[lower] {
-                out += isUpper ? mapped.uppercased() : mapped
-            } else {
-                out.append(ch)
-            }
-        }
-        return out
-    }
-
-    private let en2uk: [Character: String] = [
-        "q":"й","w":"ц","e":"у","r":"к","t":"е","y":"н","u":"г","i":"ш","o":"щ","p":"з","[":"х","]":"ї",
-        "a":"ф","s":"і","d":"в","f":"а","g":"п","h":"р","j":"о","k":"л","l":"д",";":"ж","'":"є",
-        "z":"я","x":"ч","c":"с","v":"м","b":"и","n":"т","m":"ь",",":"б",".":"ю","/":"."
-    ]
-    private lazy var uk2en: [Character: String] = {
-        var rev: [Character: String] = [:]
-        for (k,v) in en2uk { for ch in v { rev[ch] = String(k) } }
-        rev["’"] = "'" // apostrophe variant
-        return rev
-    }()
 
     // MARK: - Accessibility helpers & tie capture
 
@@ -1019,7 +1203,17 @@ self?.settingsWindow = nil
                 if !ok {
                     fallbackTypeOverSelection(el: el, text: cand.converted, restoreCaretTo: newCaret)
                 } else {
-            playSwitchSound(); menuBar.updateStatusTitleAndColor()
+                    let correctedRange = NSRange(location: finalRange.location, length: convertedLen)
+                    rememberAXUndo(
+                        element: el,
+                        range: correctedRange,
+                        original: cand.original,
+                        corrected: cand.converted,
+                        before: cand.before,
+                        after: cand.after,
+                        restoreLangPrefix: oppositeLanguagePrefix(cand.targetLangPrefix)
+                    )
+                    playSwitchSound(); menuBar.updateStatusTitleAndColor()
                 }
                 return
             }
@@ -1027,6 +1221,62 @@ self?.settingsWindow = nil
 
         // AX path failed → keystroke fallback
         fallbackNavigateAndReplace(cand)
+    }
+
+    private func applyAXUndo(_ undo: CorrectionUndo) -> Bool {
+        guard let el = undo.element, axPID(el) == undo.pid,
+              let caretBefore = axSelectedRange(el),
+              var full = axStringValue(el),
+              let cr = undo.range else {
+            return false
+        }
+
+        let ns = full as NSString
+        var finalRange = NSRange(location: cr.location, length: cr.length)
+        if finalRange.location + finalRange.length > ns.length ||
+           ns.substring(with: finalRange) != undo.corrected {
+            let windowStart = max(0, Int(cr.location) - 128)
+            let windowEnd = min(ns.length, Int(cr.location + cr.length) + 128)
+            let window = NSRange(location: windowStart, length: max(0, windowEnd - windowStart))
+            let needle = undo.before + undo.corrected + undo.after
+            var found = ns.range(of: needle, options: [], range: window)
+            if found.location != NSNotFound {
+                finalRange = NSRange(location: found.location + (undo.before as NSString).length,
+                                     length: (undo.corrected as NSString).length)
+            } else {
+                found = ns.range(of: undo.corrected, options: [.backwards], range: window)
+                guard found.location != NSNotFound else { return false }
+                finalRange = found
+            }
+        }
+
+        guard axSetSelectedRange(el, finalRange) else { return false }
+        full = axStringValue(el) ?? full
+        let current = full as NSString
+        let newText = current.replacingCharacters(in: finalRange, with: undo.original)
+
+        isSynthesizing = true
+        let ok = axSetStringValue(el, newText)
+        let originalLen = (undo.original as NSString).length
+        let correctedLen = finalRange.length
+        let delta = originalLen - correctedLen
+        let afterWordIndex = finalRange.location + finalRange.length
+
+        let newCaret: Int
+        if caretBefore.location >= afterWordIndex {
+            newCaret = caretBefore.location + delta
+        } else if caretBefore.location >= finalRange.location && caretBefore.location <= afterWordIndex {
+            let insideOffset = caretBefore.location - finalRange.location
+            newCaret = finalRange.location + min(insideOffset, originalLen)
+        } else {
+            newCaret = caretBefore.location
+        }
+        _ = axSetSelectedRange(el, NSRange(location: max(0, newCaret), length: 0))
+        isSynthesizing = false
+
+        guard ok else { return false }
+        restoreLayoutAfterUndo(undo.restoreLangPrefix)
+        return true
     }
 
     private func fallbackTypeOverSelection(el: AXUIElement, text: String, restoreCaretTo pos: Int) {
@@ -1039,10 +1289,47 @@ self?.settingsWindow = nil
         playSwitchSound(); menuBar.updateStatusTitleAndColor()
     }
 
-    private func fallbackNavigateAndReplace(_ cand: AmbiguousCandidate) {
+    private func restoreLayoutAfterUndo(_ languagePrefix: String) {
+        let finish = {
+            self.menuBar.updateStatusTitleAndColor()
+            self.playSwitchSound()
+        }
+
+        guard let targetID = layoutID(forLanguagePrefix: languagePrefix) else {
+            finish()
+            return
+        }
+        ensureSwitch(to: targetID, done: finish)
+    }
+
+    private func fallbackNavigateAndUndo(_ undo: CorrectionUndo) {
+        let cand = AmbiguousCandidate(
+            element: nil,
+            pid: undo.pid,
+            range: nil,
+            original: undo.corrected,
+            converted: undo.original,
+            before: undo.before,
+            after: undo.after,
+            when: CFAbsoluteTimeGetCurrent(),
+            targetLangPrefix: undo.restoreLangPrefix,
+            keystrokeOnly: true,
+            wordsAhead: undo.wordsAhead
+        )
+        fallbackNavigateAndReplace(cand, recordUndo: false)
+    }
+
+    private func fallbackNavigateAndReplace(_ cand: AmbiguousCandidate, recordUndo: Bool = true) {
         #if DEBUG
         if isRunningUnitTests || testSimulationMode {
-            _ = testSimulateAmbiguityOnTestText(cand)
+            if testSimulateAmbiguityOnTestText(cand), recordUndo {
+                rememberBlindUndo(
+                    original: cand.original,
+                    corrected: cand.converted,
+                    restoreLangPrefix: oppositeLanguagePrefix(cand.targetLangPrefix),
+                    wordsAhead: cand.wordsAhead
+                )
+            }
             return
         }
         #endif
@@ -1065,6 +1352,14 @@ self?.settingsWindow = nil
             self.ensureSwitch(to: targetID) {
                 self.dlog("[NAVREP] typing on targetID=\(targetID) synth=\(self.isSynthesizing)")
                 self.typeUnicode(cand.converted)
+                if recordUndo {
+                    self.rememberBlindUndo(
+                        original: cand.original,
+                        corrected: cand.converted,
+                        restoreLangPrefix: self.oppositeLanguagePrefix(cand.targetLangPrefix),
+                        wordsAhead: cand.wordsAhead
+                    )
+                }
                 // Return caret to where it was
                 for _ in 0..<stepsLeft { self.optRight() }
                 self.menuBar.updateStatusTitleAndColor()
@@ -1095,6 +1390,10 @@ extension AppCoordinator {
 
     /// Allows tests to toggle synthesizing state.
     func testSetSynthesizing(_ value: Bool) { isSynthesizing = value }
+
+    func testMarkSynthetic(_ event: CGEvent) {
+        _ = markSynthetic(event)
+    }
 
     /// Returns the number of events queued while synthesizing.
     func testQueuedEventsCount() -> Int {
@@ -1154,6 +1453,19 @@ extension AppCoordinator {
         return true
     }
 
+    private func testSimulateUndoOnTestText(_ undo: CorrectionUndo) -> Bool {
+        var searchEnd = testDocumentText.endIndex
+        var targetRange: Range<String.Index>? = nil
+        for _ in 0...max(0, undo.wordsAhead) {
+            guard let r = lastWordRange(in: testDocumentText[..<searchEnd]) else { return false }
+            targetRange = r
+            searchEnd = r.lowerBound
+        }
+        guard let range = targetRange, String(testDocumentText[range]) == undo.corrected else { return false }
+        testDocumentText.replaceSubrange(range, with: undo.original)
+        return true
+    }
+
     /// Seed an ambiguity candidate for tests.
     func testPushAmbiguity(original: String, converted: String, targetLangPrefix: String, wordsAhead: Int) {
         let cand = AmbiguousCandidate(
@@ -1177,15 +1489,39 @@ extension AppCoordinator {
         guard !ambiguityStack.isEmpty else { return }
         let cand = ambiguityStack.removeLast()
         if isRunningUnitTests {
-            _ = testSimulateAmbiguityOnTestText(cand)
+            if testSimulateAmbiguityOnTestText(cand) {
+                rememberBlindUndo(
+                    original: cand.original,
+                    corrected: cand.converted,
+                    restoreLangPrefix: oppositeLanguagePrefix(cand.targetLangPrefix),
+                    wordsAhead: cand.wordsAhead
+                )
+            }
             return
         }
         if testSimulationMode {
-            _ = testSimulateAmbiguityOnTestText(cand)
+            if testSimulateAmbiguityOnTestText(cand) {
+                rememberBlindUndo(
+                    original: cand.original,
+                    corrected: cand.converted,
+                    restoreLangPrefix: oppositeLanguagePrefix(cand.targetLangPrefix),
+                    wordsAhead: cand.wordsAhead
+                )
+            }
             return
         }
         // Fallback to normal path
         fallbackNavigateAndReplace(cand)
+    }
+
+    func testUndoLastCorrectionSynchronously() {
+        undoLastCorrection()
+    }
+
+    func testSetEditingInsideWordBeforeInput(_ editing: Bool) {
+        #if DEBUG
+        testEditingInsideWordBeforeInput = editing
+        #endif
     }
 
     func testCapturedText() -> String { testDocumentText }

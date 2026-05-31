@@ -4,41 +4,33 @@ import PackageDescription
 let package = Package(
     name: "LayoutBuddy",
     platforms: [
-        .macOS(.v13),
-        .iOS(.v16)
+        .macOS(.v14)
     ],
     products: [
         .library(name: "LayoutBuddy", targets: ["LayoutBuddy"])
     ],
-    dependencies: [
-        .package(url: "https://github.com/apple/swift-testing", from: "0.3.1")
-    ],
+    dependencies: [],
     targets: [
         .target(
             name: "LayoutBuddy",
             path: "LayoutBuddy",
             exclude: [
-                "AppCoordinator.swift",
                 "AppDelegate.swift",
-                "EventTapController.swift",
-                "KeyboardLayoutManager.swift",
                 "LayoutBuddyApp.swift",
-                "SettingsView.swift",
-                "MenuBarController.swift",
-                "LayoutPreferences.swift",
-                "Hotkey.swift",
-                "HotkeyRecorder.swift",
                 "LayoutBuddy.entitlements",
                 "Assets.xcassets"
+            ],
+            swiftSettings: [
+                .swiftLanguageMode(.v5)
             ]
         ),
         .testTarget(
             name: "LayoutBuddyTests",
-            dependencies: [
-                "LayoutBuddy",
-                .product(name: "Testing", package: "swift-testing")
-            ],
-            path: "LayoutBuddyTests"
+            dependencies: ["LayoutBuddy"],
+            path: "LayoutBuddyTests",
+            swiftSettings: [
+                .swiftLanguageMode(.v5)
+            ]
         )
     ]
 )

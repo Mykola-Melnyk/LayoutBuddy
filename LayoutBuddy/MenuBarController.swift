@@ -14,6 +14,7 @@ final class MenuBarController: NSObject {
     var onOpenSettings: (() -> Void)?
     var onForceCorrectLastWord: (() -> Void)?
     var onCorrectLastAmbiguousWord: (() -> Void)?
+    var onUndoLastCorrection: (() -> Void)?
 
     private var menu: NSMenu?
     private var isConversionOn = true
@@ -101,24 +102,26 @@ final class MenuBarController: NSObject {
         let build = { [self] in
             let menu = NSMenu()
 
-            // Toggle conversion item with native key equivalent hint on the right
             let toggleBase = isConversionOn ? "Turn conversion OFF" : "Turn conversion ON"
             let toggleItem = NSMenuItem(title: toggleBase, action: #selector(toggleConversionMenu), keyEquivalent: "")
             toggleItem.target = self
             applyKeyEquivalent(toggleItem, from: preferences.toggleHotkey)
             menu.addItem(toggleItem)
 
-            // Convert last ambiguous word with native key equivalent hint on the right
             let convertItem = NSMenuItem(title: "Convert last ambiguous word", action: #selector(convertLastAmbiguousWord), keyEquivalent: "")
             convertItem.target = self
             applyKeyEquivalent(convertItem, from: preferences.convertHotkey)
             menu.addItem(convertItem)
 
-            // Force-correct last word with native key equivalent hint on the right
             let forceItem = NSMenuItem(title: "Force-correct last word", action: #selector(forceCorrectLastWord), keyEquivalent: "")
             forceItem.target = self
             applyKeyEquivalent(forceItem, from: preferences.forceCorrectHotkey)
             menu.addItem(forceItem)
+
+            let undoItem = NSMenuItem(title: "Undo last correction", action: #selector(undoLastCorrection), keyEquivalent: "")
+            undoItem.target = self
+            applyKeyEquivalent(undoItem, from: preferences.undoCorrectionHotkey)
+            menu.addItem(undoItem)
 
             let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
             settingsItem.keyEquivalentModifierMask = [.command]
@@ -139,19 +142,17 @@ final class MenuBarController: NSObject {
         }
     }
 
-    /// Apply an NSMenuItem key equivalent based on a Hotkey, to show a native
-    /// right-aligned, dimmed shortcut hint without hardcoding.
     private func applyKeyEquivalent(_ item: NSMenuItem, from hotkey: Hotkey) {
+        let modifierSymbols: Set<Character> = ["⌃", "⌥", "⌘", "⇧"]
+        let key = String(hotkey.display.filter { !modifierSymbols.contains($0) })
+
         item.keyEquivalentModifierMask = hotkey.modifiers
-        // Derive the base key from the display string (e.g., "⌃⌥⌘F" or "⌃⌥Space").
-        let mods: Set<Character> = ["⌃", "⌥", "⌘", "⇧"]
-        let remainder = hotkey.display.filter { !mods.contains($0) }
-        if remainder == "Space" {
+        switch key {
+        case "Space":
             item.keyEquivalent = " "
-        } else if remainder.count == 1, let ch = remainder.first {
-            item.keyEquivalent = String(ch).lowercased()
-        } else {
-            // Unknown or multi-char token (e.g., unsupported capture) → no key eq.
+        case let key where key.count == 1:
+            item.keyEquivalent = key.lowercased()
+        default:
             item.keyEquivalent = ""
             item.keyEquivalentModifierMask = []
         }
@@ -187,6 +188,10 @@ final class MenuBarController: NSObject {
 
     @objc private func convertLastAmbiguousWord() {
         onCorrectLastAmbiguousWord?()
+    }
+
+    @objc private func undoLastCorrection() {
+        onUndoLastCorrection?()
     }
 
     @objc private func statusItemClicked(_ sender: Any?) {

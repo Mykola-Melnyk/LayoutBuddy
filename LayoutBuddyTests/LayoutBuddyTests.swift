@@ -1,258 +1,273 @@
-//
-//  LayoutBuddyTests.swift
-//  LayoutBuddyTests
-//
-//  Created by Mykola Melnyk on 10.08.2025.
-//
-
-import Testing
+import Carbon
+import CoreGraphics
+import XCTest
 @testable import LayoutBuddy
 
-#if canImport(CoreGraphics)
-import CoreGraphics
-#endif
-
-#if canImport(Carbon)
-import Carbon
-#endif
-
-import Foundation
-
-@Suite(.serialized)
 @MainActor
-struct LayoutBuddyTests {
-
-    init() {
+final class LayoutBuddyTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
         AppCoordinator().testSetSimulationMode(true)
     }
-    
-    @Test func testEnglishInputProducesUkrainianOutput() throws {
-            let app = AppCoordinator()
-            #expect(app.convert("ghbdsn", from: "en", to: "uk") == "привіт")
-        }
-    
-    @Test func testEnglishWithCommaAndRealWordInputProducesUkrainianOutput() throws {
-            let app = AppCoordinator()
-            #expect(app.convert(",elm", from: "en", to: "uk") == "будь")
-        }
 
-    @Test func testUkrainianInputProducesEnglishOutput() throws {
-            let app = AppCoordinator()
-            #expect(app.convert("руддщ", from: "uk", to: "en") == "hello")
-        }
+    func testEnglishInputProducesUkrainianOutput() {
+        let app = makeApp()
 
-    @Test func testDeleteClearsBufferWithoutConversion() async throws {
-        let app = AppCoordinator()
-
-        // Simulate Delete key removing last character
-        app.testWordBuffer = "word.x"
-        let deleteEvent = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(kVK_Delete), keyDown: true)!
-        let resultDelete = app.testHandleKeyEvent(type: .keyDown, event: deleteEvent)
-        #expect(app.testWordBuffer == "word.")
-        #expect(resultDelete?.takeUnretainedValue() === deleteEvent)
-
-        // Simulate Forward Delete key removing last character
-        app.testWordBuffer = "word"
-        let forwardDeleteEvent = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(kVK_ForwardDelete), keyDown: true)!
-        let resultForward = app.testHandleKeyEvent(type: .keyDown, event: forwardDeleteEvent)
-        #expect(app.testWordBuffer == "wor")
-        #expect(resultForward?.takeUnretainedValue() === forwardDeleteEvent)
+        XCTAssertEqual(app.convert("ghbdsn", from: "en", to: "uk"), "привіт")
     }
 
-    @Test func testAtSymbolSkipsLayoutSwitching() throws {
-        let app = AppCoordinator()
+    func testEnglishWithCommaAndRealWordInputProducesUkrainianOutput() {
+        let app = makeApp()
+
+        XCTAssertEqual(app.convert(",elm", from: "en", to: "uk"), "будь")
+    }
+
+    func testUkrainianInputProducesEnglishOutput() {
+        let app = makeApp()
+
+        XCTAssertEqual(app.convert("руддщ", from: "uk", to: "en"), "hello")
+    }
+
+    func testDeleteClearsBufferWithoutConversion() throws {
+        let app = makeApp()
+
+        app.testWordBuffer = "word.x"
+        let deleteEvent = try keyEvent(keyCode: CGKeyCode(kVK_Delete))
+        let resultDelete = app.testHandleKeyEvent(type: .keyDown, event: deleteEvent)
+        XCTAssertEqual(app.testWordBuffer, "word.")
+        XCTAssertTrue(resultDelete?.takeUnretainedValue() === deleteEvent)
+
+        app.testWordBuffer = "word"
+        let forwardDeleteEvent = try keyEvent(keyCode: CGKeyCode(kVK_ForwardDelete))
+        let resultForward = app.testHandleKeyEvent(type: .keyDown, event: forwardDeleteEvent)
+        XCTAssertTrue(app.testWordBuffer.isEmpty)
+        XCTAssertTrue(resultForward?.takeUnretainedValue() === forwardDeleteEvent)
+    }
+
+    func testAtSymbolSkipsLayoutSwitching() throws {
+        let app = makeApp()
         app.testWordBuffer = "hello"
-
-        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
-            #expect(Bool(false), "Unable to create CGEvent for testing")
-            return
-        }
-
-        var at: UniChar = 64 // '@'
-        event.keyboardSetUnicodeString(stringLength: 1, unicodeString: &at)
+        let event = try keyEvent(character: "@")
 
         let returned = app.testHandleKeyEvent(type: .keyDown, event: event)?.takeUnretainedValue()
-        #expect(returned === event)
 
-        // Word buffer should be cleared to avoid layout switching inside email-like strings
-        #expect(app.testWordBuffer.isEmpty)
-
-        var ch: UniChar = 0
-        var len: Int = 0
-        returned?.keyboardGetUnicodeString(maxStringLength: 1, actualStringLength: &len, unicodeString: &ch)
-        #expect(len == 1 && ch == at)
+        XCTAssertTrue(returned === event)
+        XCTAssertTrue(app.testWordBuffer.isEmpty)
+        XCTAssertEqual(try firstCharacterCode(from: event), UniChar(64))
     }
 
-    @Test func testEmailAddressRemainsUnchangedAfterSpace() throws {
-        let app = AppCoordinator()
-        let email = "mr.nicholas.x@gmail.com"
+    func testEmailAddressRemainsUnchangedAfterSpace() throws {
+        let app = makeApp()
 
-        for scalar in email.unicodeScalars {
-            guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
-                #expect(Bool(false), "Unable to create CGEvent for testing")
-                return
-            }
-            var ch: UniChar = UniChar(scalar.value)
-            event.keyboardSetUnicodeString(stringLength: 1, unicodeString: &ch)
-            _ = app.testHandleKeyEvent(type: .keyDown, event: event)
-        }
+        try type("mr.nicholas.x@gmail.com", into: app)
 
-        // After typing the full email, the internal buffer should remain empty
-        #expect(app.testWordBuffer.isEmpty)
+        XCTAssertTrue(app.testWordBuffer.isEmpty)
 
-        // Typing space should simply pass through and keep buffer empty
-        guard let spaceEvent = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
-            #expect(Bool(false), "Unable to create space CGEvent for testing")
-            return
-        }
-        var space: UniChar = 32
-        spaceEvent.keyboardSetUnicodeString(stringLength: 1, unicodeString: &space)
+        let spaceEvent = try keyEvent(character: " ")
         let returned = app.testHandleKeyEvent(type: .keyDown, event: spaceEvent)?.takeUnretainedValue()
-        #expect(returned === spaceEvent)
-        #expect(app.testWordBuffer.isEmpty)
+        XCTAssertTrue(returned === spaceEvent)
+        XCTAssertTrue(app.testWordBuffer.isEmpty)
     }
 
-    @Test func testScriptChangeStartsNewWord() throws {
-        let app = AppCoordinator()
+    func testScriptChangeStartsNewWord() throws {
+        let app = makeApp()
 
-        // Type an English word
-        for scalar in "hello".unicodeScalars {
-            guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
-                #expect(Bool(false), "Unable to create CGEvent for testing")
-                return
-            }
-            var ch: UniChar = UniChar(scalar.value)
-            event.keyboardSetUnicodeString(stringLength: 1, unicodeString: &ch)
-            _ = app.testHandleKeyEvent(type: .keyDown, event: event)
-        }
+        try type("hello", into: app)
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: "щ"))
+        XCTAssertEqual(app.testWordBuffer, "щ")
 
-        // Follow with a Cyrillic letter that should start a new word
-        guard let shchEvent = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
-            #expect(Bool(false), "Unable to create Cyrillic CGEvent for testing")
-            return
-        }
-        var shch: UniChar = 0x0449 // 'щ'
-        shchEvent.keyboardSetUnicodeString(stringLength: 1, unicodeString: &shch)
-        _ = app.testHandleKeyEvent(type: .keyDown, event: shchEvent)
-        #expect(app.testWordBuffer == String(UnicodeScalar(0x0449)!))
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: " "))
+        XCTAssertTrue(app.testWordBuffer.isEmpty)
 
-        // Typing space should clear the buffer
-        guard let spaceEvent = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
-            #expect(Bool(false), "Unable to create space CGEvent for testing")
-            return
-        }
-        var space: UniChar = 32
-        spaceEvent.keyboardSetUnicodeString(stringLength: 1, unicodeString: &space)
-        _ = app.testHandleKeyEvent(type: .keyDown, event: spaceEvent)
-        #expect(app.testWordBuffer.isEmpty)
-
-        // Now a Ukrainian word followed by a Latin letter
-        for scalar in "привіт".unicodeScalars {
-            guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
-                #expect(Bool(false), "Unable to create CGEvent for testing")
-                return
-            }
-            var ch: UniChar = UniChar(scalar.value)
-            event.keyboardSetUnicodeString(stringLength: 1, unicodeString: &ch)
-            _ = app.testHandleKeyEvent(type: .keyDown, event: event)
-        }
-
-        guard let nEvent = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
-            #expect(Bool(false), "Unable to create Latin CGEvent for testing")
-            return
-        }
-        var n: UniChar = 110 // 'n'
-        nEvent.keyboardSetUnicodeString(stringLength: 1, unicodeString: &n)
-        _ = app.testHandleKeyEvent(type: .keyDown, event: nEvent)
-        #expect(app.testWordBuffer == "n")
+        try type("привіт", into: app)
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: "n"))
+        XCTAssertEqual(app.testWordBuffer, "n")
     }
 
-    @Test func testBufferedEventsDuringSynthesis() throws {
-        let app = AppCoordinator()
+    func testBufferedEventsDuringSynthesis() throws {
+        let app = makeApp()
         app.testSetSynthesizing(true)
 
-        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
-            #expect(Bool(false), "Unable to create CGEvent for testing")
-            return
-        }
-        var ch: UniChar = 97 // 'a'
-        event.keyboardSetUnicodeString(stringLength: 1, unicodeString: &ch)
-
+        let event = try keyEvent(character: "a")
         let result = app.testHandleKeyEvent(type: .keyDown, event: event)
-        #expect(result == nil)
-        #expect(app.testQueuedEventsCount() == 1)
+
+        XCTAssertNil(result)
+        XCTAssertEqual(app.testQueuedEventsCount(), 1)
 
         app.testSetSynthesizing(false)
-        #expect(app.testQueuedEventsCount() == 0)
+        XCTAssertEqual(app.testQueuedEventsCount(), 0)
     }
 
-    @Test func testHotkeyAppliesAmbiguityToMostRecentWord() throws {
-        let app = AppCoordinator()
-        app.testSetSimulationMode(true)
-        app.testDocumentText = ""
-        // Simulate having typed: "the best cat" with English layout
-        app.testDocumentText = "the best cat"
+    func testSyntheticRestoredTextDoesNotEnterWordBuffer() throws {
+        let app = makeApp()
 
-        // Seed an ambiguity for the word "the" that should convert to Ukrainian-position mapping "еру".
-        // Since two words were typed after it ("best", "cat"), wordsAhead is 2.
+        for character in "csv" {
+            let event = try keyEvent(character: character)
+            app.testMarkSynthetic(event)
+            let returned = app.testHandleKeyEvent(type: .keyDown, event: event)?.takeUnretainedValue()
+
+            XCTAssertTrue(returned === event)
+        }
+
+        XCTAssertTrue(app.testWordBuffer.isEmpty)
+    }
+
+    func testHotkeyAppliesAmbiguityToMostRecentWord() {
+        let app = makeApp()
+        app.testDocumentText = "the best cat"
         app.testPushAmbiguity(original: "the", converted: "еру", targetLangPrefix: "uk", wordsAhead: 2)
 
-        // Apply the most recent ambiguity synchronously for deterministic assert.
         app.testApplyMostRecentAmbiguitySynchronously()
 
-        // Verify only the first word is converted.
-        #expect(app.testDocumentText == "еру best cat")
+        XCTAssertEqual(app.testDocumentText, "еру best cat")
     }
 
-    @Test func testShortcutTogglesConversion() throws {
-        #if os(macOS)
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+    func testUndoHotkeyRestoresLastAmbiguousCorrection() throws {
+        let suiteName = UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
         let prefs = LayoutPreferences(defaults: defaults)
-        let app = AppCoordinator(preferences: prefs)
-        let keyCode = prefs.toggleHotkey.keyCode
-        let flags = CGEventFlags(rawValue: UInt64(prefs.toggleHotkey.modifiers.rawValue))
-        #else
-        let app = AppCoordinator()
-        let keyCode = CGKeyCode(29)
-        let flags: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate]
-        #endif
-        #expect(app.testConversionOn)
+        let app = makeApp(preferences: prefs)
+        app.testDocumentText = "the best cat"
+        app.testPushAmbiguity(original: "the", converted: "еру", targetLangPrefix: "uk", wordsAhead: 2)
+        app.testApplyMostRecentAmbiguitySynchronously()
+        XCTAssertEqual(app.testDocumentText, "еру best cat")
 
-        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true) else {
-            #expect(Bool(false), "Unable to create CGEvent for testing")
-            return
-        }
-        event.flags = flags
+        let event = try keyEvent(
+            keyCode: prefs.undoCorrectionHotkey.keyCode,
+            flags: CGEventFlags(rawValue: UInt64(prefs.undoCorrectionHotkey.modifiers.rawValue))
+        )
+        let result = app.testHandleKeyEvent(type: .keyDown, event: event)
 
-        defer {
-            if !app.testConversionOn {
-                _ = app.testHandleKeyEvent(type: CGEventType.keyDown, event: event)
-            }
-        }
-
-        _ = app.testHandleKeyEvent(type: CGEventType.keyDown, event: event)
-        #expect(!app.testConversionOn)
-
-        _ = app.testHandleKeyEvent(type: CGEventType.keyDown, event: event)
-        #expect(app.testConversionOn)
+        XCTAssertNil(result)
+        XCTAssertEqual(app.testDocumentText, "the best cat")
     }
 
-    @Test func testUAWordFollowedByExclamation_ConvertsAndKeepsPunctuation() throws {
-        let app = AppCoordinator()
+    func testShortcutTogglesConversion() throws {
+        let suiteName = UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let prefs = LayoutPreferences(defaults: defaults)
+        let app = makeApp(preferences: prefs)
+        let event = try keyEvent(
+            keyCode: prefs.toggleHotkey.keyCode,
+            flags: CGEventFlags(rawValue: UInt64(prefs.toggleHotkey.modifiers.rawValue))
+        )
+
+        XCTAssertTrue(app.testConversionOn)
+
+        _ = app.testHandleKeyEvent(type: .keyDown, event: event)
+        XCTAssertFalse(app.testConversionOn)
+
+        _ = app.testHandleKeyEvent(type: .keyDown, event: event)
+        XCTAssertTrue(app.testConversionOn)
+    }
+
+    func testUAWordFollowedByExclamationConvertsAndKeepsPunctuation() throws {
+        let app = makeApp()
+
+        try type("цщклі", into: app)
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: "!"))
+
+        XCTAssertEqual(app.testCapturedText(), "works!")
+    }
+
+    func testUndoRestoresAutomaticCorrectionBeforePunctuation() throws {
+        let app = makeApp()
+
+        try type("цщклі", into: app)
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: "!"))
+        XCTAssertEqual(app.testCapturedText(), "works!")
+
+        app.testUndoLastCorrectionSynchronously()
+
+        XCTAssertEqual(app.testCapturedText(), "цщклі!")
+    }
+
+    func testConvertAmbiguousHotkeyRestoresLastAutomaticCorrectionWhenNoAmbiguityExists() throws {
+        let suiteName = UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let prefs = LayoutPreferences(defaults: defaults)
+        let app = makeApp(preferences: prefs)
+
+        try type("цщклі", into: app)
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: "!"))
+        XCTAssertEqual(app.testCapturedText(), "works!")
+
+        let event = try keyEvent(
+            keyCode: prefs.convertHotkey.keyCode,
+            flags: CGEventFlags(rawValue: UInt64(prefs.convertHotkey.modifiers.rawValue))
+        )
+        let result = app.testHandleKeyEvent(type: .keyDown, event: event)
+
+        XCTAssertNil(result)
+        XCTAssertEqual(app.testCapturedText(), "цщклі!")
+    }
+
+    func testCursorNavigationClearsCurrentWordBuffer() throws {
+        let app = makeApp()
+
+        try type("цщклі", into: app)
+        XCTAssertEqual(app.testWordBuffer, "цщклі")
+
+        let leftArrow = try keyEvent(keyCode: CGKeyCode(kVK_LeftArrow))
+        let result = app.testHandleKeyEvent(type: .keyDown, event: leftArrow)
+
+        XCTAssertTrue(result?.takeUnretainedValue() === leftArrow)
+        XCTAssertTrue(app.testWordBuffer.isEmpty)
+    }
+
+    func testMidWordEditDoesNotConvertBufferedWord() throws {
+        let app = makeApp()
+
+        try type("цщклі", into: app)
+        app.testSetEditingInsideWordBeforeInput(true)
+
+        let editEvent = try keyEvent(character: "a")
+        let editResult = app.testHandleKeyEvent(type: .keyDown, event: editEvent)
+
+        XCTAssertTrue(editResult?.takeUnretainedValue() === editEvent)
+        XCTAssertTrue(app.testWordBuffer.isEmpty)
+
+        app.testSetEditingInsideWordBeforeInput(false)
+        let boundaryEvent = try keyEvent(character: "!")
+        let boundaryResult = app.testHandleKeyEvent(type: .keyDown, event: boundaryEvent)
+
+        XCTAssertTrue(boundaryResult?.takeUnretainedValue() === boundaryEvent)
+        XCTAssertEqual(app.testCapturedText(), "")
+    }
+
+    private func makeApp(preferences: LayoutPreferences = LayoutPreferences()) -> AppCoordinator {
+        let app = AppCoordinator(preferences: preferences)
         app.testSetSimulationMode(true)
+        return app
+    }
 
-        func keyEvent(for ch: Character) -> CGEvent {
-            let e = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true)!
-            var u: UniChar = UniChar(ch.unicodeScalars.first!.value)
-            e.keyboardSetUnicodeString(stringLength: 1, unicodeString: &u)
-            return e
+    private func type(_ text: String, into app: AppCoordinator) throws {
+        for character in text {
+            _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: character))
         }
+    }
 
-        for ch in "цщклі" {
-            _ = app.testHandleKeyEvent(type: .keyDown, event: keyEvent(for: ch))
+    private func keyEvent(character: Character? = nil, keyCode: CGKeyCode = 0, flags: CGEventFlags = []) throws -> CGEvent {
+        let event = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true))
+        event.flags = flags
+        if let scalar = character?.unicodeScalars.first {
+            var value = UniChar(scalar.value)
+            event.keyboardSetUnicodeString(stringLength: 1, unicodeString: &value)
         }
-        _ = app.testHandleKeyEvent(type: .keyDown, event: keyEvent(for: "!"))
+        return event
+    }
 
-        #expect(app.testCapturedText() == "works!")
+    private func firstCharacterCode(from event: CGEvent) throws -> UniChar {
+        var value: UniChar = 0
+        var length = 0
+        event.keyboardGetUnicodeString(maxStringLength: 1, actualStringLength: &length, unicodeString: &value)
+        XCTAssertEqual(length, 1)
+        return value
     }
 }
