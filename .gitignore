@@ -1,2 +1,6 @@
 LayoutBuddy.xcodeproj/xcuserdata/mmelnyk.xcuserdatad/xcdebugger/Breakpoints_v2.xcbkptlist
 .build/
+
+# Release pipeline output
+dist/
+build/

@@ -23,7 +23,12 @@ APP_NAME="LayoutBuddy"
 CONFIGURATION="${CONFIGURATION:-Release}"
 TEAM_ID="${TEAM_ID:-2GC3A5P98F}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-LayoutBuddy}"
-BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
+# Build OUTSIDE the project folder: it lives in iCloud Drive, whose daemon keeps
+# re-tagging files with com.apple.FinderInfo, which codesign rejects. /tmp is
+# never synced, so signing is reliable there. The finished DMG is copied back
+# into the repo's dist/ at the end (FinderInfo on a signed+stapled DMG is moot).
+BUILD_DIR="${BUILD_DIR:-/tmp/LayoutBuddy-release}"
+DIST_DIR="${DIST_DIR:-$ROOT/dist}"
 
 ARCHIVE="$BUILD_DIR/$APP_NAME.xcarchive"
 EXPORT_DIR="$BUILD_DIR/export"
@@ -96,6 +101,7 @@ cat > "$BUILD_DIR/ExportOptions.plist" <<PLIST
   <key>method</key><string>developer-id</string>
   <key>teamID</key><string>$TEAM_ID</string>
   <key>signingStyle</key><string>automatic</string>
+  <key>hardenedRuntime</key><true/>
 </dict>
 </plist>
 PLIST
@@ -107,9 +113,26 @@ run "$BUILD_DIR/export.log" xcodebuild -exportArchive \
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 ok "Exported $APP_NAME $VERSION"
 
-# ---- 3. Verify signature + hardened runtime ----
-codesign --verify --strict --deep --verbose=2 "$APP" 2>/dev/null || die "Codesign verification failed."
-codesign -dvv "$APP" 2>&1 | grep -q 'flags=.*runtime' || die "Hardened runtime is not enabled on the app."
+# ---- 3. Ensure & verify hardened runtime ----
+# Some xcodebuild export paths re-sign Developer ID apps WITHOUT the hardened
+# runtime flag, which notarization then rejects. Re-sign deterministically with
+# it. LayoutBuddy bundles no frameworks/helpers, so signing the bundle is
+# complete; add inside-out signing here if that ever changes.
+log "Re-signing with hardened runtime…"
+# iCloud Drive (and spaces in the path) tag files with com.apple.FinderInfo,
+# which codesign rejects ("Disallowed xattr"). Strip extended attributes first.
+xattr -cr "$APP"
+# Ensure no lingering FinderInfo attributes that might have been re-added
+xattr -d com.apple.FinderInfo "$APP" 2>/dev/null || true
+codesign --force --options runtime --timestamp \
+  --entitlements "$ROOT/LayoutBuddy/LayoutBuddy.entitlements" \
+  --sign "$SIGN_ID" "$APP"
+codesign --verify --strict --verbose=2 "$APP" 2>/dev/null || die "Codesign verification failed."
+# Capture first, THEN grep. Piping `codesign -dvv` straight into `grep -q` lets
+# grep close the pipe on the first match; with `pipefail` that makes codesign
+# die on SIGPIPE and falsely fails the check even when runtime IS present.
+CS_FLAGS="$(codesign -dvv "$APP" 2>&1)"
+grep -q 'flags=.*runtime' <<<"$CS_FLAGS" || die "Hardened runtime is not enabled on the app."
 ok "Signature + hardened runtime verified"
 
 # ---- 4. Notarize + staple the app ----
@@ -126,9 +149,11 @@ DMG="$BUILD_DIR/$APP_NAME-$VERSION.dmg"
 STAGE="$BUILD_DIR/dmg"
 rm -rf "$STAGE"; mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
+xattr -cr "$STAGE/$APP_NAME.app"   # keep the DMG payload free of iCloud xattrs
 ln -s /Applications "$STAGE/Applications"
 rm -f "$DMG"
 run "$BUILD_DIR/dmg.log" hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+xattr -c "$DMG"
 codesign --force --timestamp --sign "$SIGN_ID" "$DMG"
 ok "DMG built + signed"
 
@@ -140,4 +165,9 @@ xcrun stapler validate "$DMG" >/dev/null && ok "DMG notarized + stapled"
 
 # ---- Done ----
 spctl -a -t open --context context:primary-signature -vv "$DMG" 2>&1 | sed 's/^/  /' || true
-log "✅ Release ready: $DMG"
+
+# Copy the finished DMG back into the repo for convenience.
+mkdir -p "$DIST_DIR"
+FINAL="$DIST_DIR/$(basename "$DMG")"
+cp -f "$DMG" "$FINAL"
+log "✅ Release ready: $FINAL"
