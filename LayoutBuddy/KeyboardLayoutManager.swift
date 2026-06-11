@@ -5,8 +5,44 @@ import Carbon
 final class KeyboardLayoutManager {
     private let preferences: LayoutPreferences
 
+    // The selectable-layouts list and its per-id index only change when the
+    // user enables/disables input sources, but `listSelectableKeyboardLayouts`
+    // and `inputSourceInfo(for:)` are called on the event-tap hot path (every
+    // keystroke). Cache the result and invalidate it on the relevant TIS
+    // notifications. Guarded by a lock because reads come from the event-tap
+    // thread while invalidation arrives on the notification thread.
+    private let cacheLock = NSLock()
+    private var allLayoutsCache: [InputSourceInfo]?
+    private var infoCache: [String: InputSourceInfo] = [:]
+    private var observerTokens: [NSObjectProtocol] = []
+
     init(preferences: LayoutPreferences) {
         self.preferences = preferences
+
+        let center = DistributedNotificationCenter.default()
+        let rawNames: [CFString?] = [
+            kTISNotifyEnabledKeyboardInputSourcesChanged,
+            kTISNotifySelectedKeyboardInputSourceChanged
+        ]
+        for raw in rawNames.compactMap({ $0 as String? }) {
+            let token = center.addObserver(
+                forName: Notification.Name(raw),
+                object: nil,
+                queue: nil
+            ) { [weak self] _ in self?.invalidateCaches() }
+            observerTokens.append(token)
+        }
+    }
+
+    deinit {
+        let center = DistributedNotificationCenter.default()
+        observerTokens.forEach(center.removeObserver(_:))
+    }
+
+    private func invalidateCaches() {
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        allLayoutsCache = nil
+        infoCache.removeAll(keepingCapacity: true)
     }
 
     // MARK: - Input Source Info
@@ -17,6 +53,15 @@ final class KeyboardLayoutManager {
     }
 
     func listSelectableKeyboardLayouts() -> [InputSourceInfo] {
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        if let cached = allLayoutsCache { return cached }
+        let infos = fetchSelectableKeyboardLayouts()
+        allLayoutsCache = infos
+        infoCache = Dictionary(infos.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return infos
+    }
+
+    private func fetchSelectableKeyboardLayouts() -> [InputSourceInfo] {
         let query: [CFString: Any] = [
             kTISPropertyInputSourceCategory: kTISCategoryKeyboardInputSource as CFString,
             kTISPropertyInputSourceIsSelectCapable: true
@@ -35,7 +80,17 @@ final class KeyboardLayoutManager {
     }
 
     func inputSourceInfo(for id: String) -> InputSourceInfo? {
-        listSelectableKeyboardLayouts().first { $0.id == id }
+        cacheLock.lock()
+        if allLayoutsCache != nil {
+            let hit = infoCache[id]
+            cacheLock.unlock()
+            return hit
+        }
+        cacheLock.unlock()
+        // Cold cache: populate it, then read the index under the lock again.
+        _ = listSelectableKeyboardLayouts()
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        return infoCache[id]
     }
 
     func isLanguage(id: String, hasPrefix prefix: String) -> Bool {

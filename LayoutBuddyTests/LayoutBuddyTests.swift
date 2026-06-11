@@ -28,6 +28,36 @@ final class LayoutBuddyTests: XCTestCase {
         XCTAssertEqual(app.convert("руддщ", from: "uk", to: "en"), "hello")
     }
 
+    func testConversionPreservesCase() {
+        let app = makeApp()
+
+        XCTAssertEqual(app.convert("Ghbdsn", from: "en", to: "uk"), "Привіт")
+        XCTAssertEqual(app.convert("Руддщ", from: "uk", to: "en"), "Hello")
+    }
+
+    func testConversionRoundTrips() {
+        let app = makeApp()
+
+        let typed = "ghbdsn"
+        let cyr = app.convert(typed, from: "en", to: "uk")
+        XCTAssertEqual(app.convert(cyr, from: "uk", to: "en"), typed)
+    }
+
+    func testGheWithUpturnKeyMapping() {
+        let app = makeApp()
+
+        XCTAssertEqual(app.convert("\\", from: "en", to: "uk"), "ґ")
+        XCTAssertEqual(app.convert("ґ", from: "uk", to: "en"), "\\")
+    }
+
+    func testUnmappedCharactersPassThroughUnchanged() {
+        let app = makeApp()
+
+        // Digits and unsupported language pairs leave text untouched.
+        XCTAssertEqual(app.convert("123", from: "en", to: "uk"), "123")
+        XCTAssertEqual(app.convert("hello", from: "en", to: "fr"), "hello")
+    }
+
     func testDeleteClearsBufferWithoutConversion() throws {
         let app = makeApp()
 

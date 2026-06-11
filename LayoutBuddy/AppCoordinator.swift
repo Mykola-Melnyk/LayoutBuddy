@@ -124,6 +124,25 @@ final class AppCoordinator: NSObject {
     private let ambiguityMax = 5
     private let contextRadius = 8
 
+    // Synthetic-keystroke choreography relies on giving the target app time to
+    // commit edits and switch layouts. These are the (empirically tuned) delays;
+    // centralised here so they are documented and tunable in one place rather
+    // than sprinkled as bare literals through the async flow.
+    private enum Timing {
+        /// Let the system commit the most recent real keystroke before we edit.
+        static let commitDelay = 0.05
+        /// Poll interval while waiting for a layout switch to take effect.
+        static let layoutSettle = 0.05
+        /// Wait for ⌘C to populate the pasteboard before reading it.
+        static let clipboardCopy = 0.12
+        /// Delay before keystroke-navigation-based replacement.
+        static let navReplace = 0.1
+        /// Delay before the convert hotkey acts, so the boundary key lands first.
+        static let convertHotkey = 0.1
+        /// Re-check delay when saving a tie candidate after a boundary.
+        static let captureTie = 0.05
+    }
+
     private struct CorrectionUndo {
         let element: AXUIElement?
         let pid: pid_t
@@ -336,7 +355,7 @@ final class AppCoordinator: NSObject {
             if isRunningUnitTests || testSimulationMode {
                 work()
             } else {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: work)
+                DispatchQueue.main.asyncAfter(deadline: .now() + Timing.convertHotkey, execute: work)
             }
             return nil
         }
@@ -550,7 +569,9 @@ final class AppCoordinator: NSObject {
             let curOK = isSpelledCorrect(core, language: curSpell)
             let converted1 = convert(core, from: curLangPrefix, to: otherLangPrefix)
             dlog("[PROC] converted=\(converted1)")
-            let otherOK = !converted1.isEmpty && isSpelledCorrect(converted1, language: otherSpell)
+            // If nothing mapped, the "other language" form is identical — there
+            // is no real alternative to consider.
+            let otherOK = converted1 != core && !converted1.isEmpty && isSpelledCorrect(converted1, language: otherSpell)
 
             if curOK && otherOK {
                 captureAmbiguityLater(original: core, converted: converted1, targetLangPrefix: otherLangPrefix)
@@ -571,7 +592,8 @@ final class AppCoordinator: NSObject {
         let curOK = !suspiciousEN && isSpelledCorrect(core, language: curSpell)
         let convertedCore = convert(core, from: curLangPrefix, to: otherLangPrefix)
         dlog("[PROC] converted=\(convertedCore)")
-        let otherOK = !convertedCore.isEmpty && isSpelledCorrect(convertedCore, language: otherSpell)
+        // If nothing mapped, the "other language" form is identical — skip it.
+        let otherOK = convertedCore != core && !convertedCore.isEmpty && isSpelledCorrect(convertedCore, language: otherSpell)
 
         // Tie: both valid → save candidate, no auto-change
         if curOK && otherOK {
@@ -743,7 +765,7 @@ final class AppCoordinator: NSObject {
             let clipboardSnapshot = PasteboardSnapshot(from: pb)
             pb.clearContents()
             self.tapKeyWithFlags(CGKeyCode(kVK_ANSI_C), flags: .maskCommand)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Timing.clipboardCopy) {
                 let original = pb.string(forType: .string) ?? ""
                 clipboardSnapshot.restore(to: pb)
                 guard !original.isEmpty else { self.isSynthesizing = false; self.playSwitchSound(); return }
@@ -797,7 +819,7 @@ final class AppCoordinator: NSObject {
             self.isSynthesizing = true
 
             // Delay to let the system commit the most recent keystroke
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Timing.commitDelay) {
                 if keepFollowingBoundary { self.tapKey(.leftArrow) } // keep trailing boundary (space, etc.)
                 self.sendBackspace(times: deleteCount)
 
@@ -891,7 +913,7 @@ final class AppCoordinator: NSObject {
     private func ensureSwitch(to targetID: String, attempts: Int = 12, done: @escaping () -> Void) {
         func attempt(_ n: Int) {
             self.layoutManager.switchLayout(to: targetID)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Timing.layoutSettle) {
                 if self.layoutManager.currentInputSourceID() == targetID || n >= attempts { done() }
                 else { attempt(n + 1) }
             }
@@ -916,13 +938,33 @@ final class AppCoordinator: NSObject {
         }
     }
 
+    // A given input-source id always maps to the same script, so memoize the
+    // (otherwise string-heavy) classification. No invalidation needed: the
+    // answer for an id never changes.
+    private var ukrainianClassification: [String: Bool] = [:]
+    private var latinClassification: [String: Bool] = [:]
+
     private func isLayoutUkrainian(_ id: String) -> Bool {
+        if let cached = ukrainianClassification[id] { return cached }
+        let result = computeIsLayoutUkrainian(id)
+        ukrainianClassification[id] = result
+        return result
+    }
+
+    private func computeIsLayoutUkrainian(_ id: String) -> Bool {
         if layoutManager.isLanguage(id: id, hasPrefix: "uk") { return true }
         let name = layoutManager.inputSourceInfo(for: id)?.name.lowercased() ?? ""
         return name.contains("ukrainian") || name.contains("україн")
     }
 
     private func isLayoutLatin(_ id: String) -> Bool {
+        if let cached = latinClassification[id] { return cached }
+        let result = computeIsLayoutLatin(id)
+        latinClassification[id] = result
+        return result
+    }
+
+    private func computeIsLayoutLatin(_ id: String) -> Bool {
         let langs = layoutManager.inputSourceInfo(for: id)?.languages ?? []
         if langs.contains(where: { $0.hasPrefix("en") }) { return true }
         if langs.contains(where: { $0.localizedCaseInsensitiveContains("latn") }) { return true }
@@ -1026,6 +1068,52 @@ final class AppCoordinator: NSObject {
         AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, newValue as CFTypeRef) == .success
     }
 
+    /// Re-locates a previously captured range inside the element's *current*
+    /// text (it may have shifted as the user kept typing). Tries the stored
+    /// range first, then a context-anchored search (`before+expected+after`),
+    /// then a backwards search for the bare expected string. Returns nil if it
+    /// can no longer be found.
+    private func relocateRange(_ initial: NSRange,
+                               in ns: NSString,
+                               expecting expected: String,
+                               before: String,
+                               after: String) -> NSRange? {
+        if initial.location + initial.length <= ns.length,
+           ns.substring(with: initial) == expected {
+            return initial
+        }
+        let windowStart = max(0, initial.location - 128)
+        let windowEnd   = min(ns.length, initial.location + initial.length + 128)
+        let window = NSRange(location: windowStart, length: max(0, windowEnd - windowStart))
+
+        let needle = before + expected + after
+        var found = ns.range(of: needle, options: [], range: window)
+        if found.location != NSNotFound {
+            return NSRange(location: found.location + (before as NSString).length,
+                           length: (expected as NSString).length)
+        }
+        found = ns.range(of: expected, options: [.backwards], range: window)
+        guard found.location != NSNotFound else { return nil }
+        return found
+    }
+
+    /// Computes where the caret should land after `replacedRange` is swapped
+    /// for text of length `newLength`.
+    private func adjustedCaret(_ caret: Int,
+                               afterReplacing replacedRange: NSRange,
+                               withLength newLength: Int) -> Int {
+        let delta = newLength - replacedRange.length
+        let afterIndex = replacedRange.location + replacedRange.length
+        if caret >= afterIndex {
+            return caret + delta
+        } else if caret >= replacedRange.location && caret <= afterIndex {
+            let insideOffset = caret - replacedRange.location
+            return replacedRange.location + min(insideOffset, newLength)
+        } else {
+            return caret
+        }
+    }
+
     // If AX fails at capture time, push a "blind" candidate so hotkey can still fix it.
     private func pushBlindAmbiguity(original: String, converted: String, targetLangPrefix: String) {
         let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
@@ -1046,7 +1134,7 @@ final class AppCoordinator: NSObject {
     private func captureAmbiguityLater(original: String,
                                        converted: String,
                                        targetLangPrefix: String,
-                                       delay: Double = 0.05) {
+                                       delay: Double = Timing.captureTie) {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             if self.isSynthesizing {
                 self.captureAmbiguityLater(original: original,
@@ -1152,26 +1240,10 @@ final class AppCoordinator: NSObject {
 
             let ns = full as NSString
             guard let cr = cand.range else { fallbackNavigateAndReplace(cand); return }
-            var finalRange = NSRange(location: cr.location, length: cr.length)
-
-            if finalRange.location + finalRange.length > ns.length ||
-               ns.substring(with: finalRange) != cand.original {
-                // Re-locate by context near old index
-                let windowStart = max(0, Int(cr.location) - 128)
-                let windowEnd   = min(ns.length, Int(cr.location + cr.length) + 128)
-                let window = NSRange(location: windowStart, length: max(0, windowEnd - windowStart))
-                let needle = cand.before + cand.original + cand.after
-                var found = ns.range(of: needle, options: [], range: window)
-                if found.location != NSNotFound {
-                    finalRange = NSRange(location: found.location + (cand.before as NSString).length,
-                                         length: (cand.original as NSString).length)
-                } else {
-                    found = ns.range(of: cand.original, options: [.backwards], range: window)
-                    if found.location == NSNotFound {
-                        fallbackNavigateAndReplace(cand); return
-                    }
-                    finalRange = found
-                }
+            let initialRange = NSRange(location: cr.location, length: cr.length)
+            guard let finalRange = relocateRange(initialRange, in: ns, expecting: cand.original,
+                                                 before: cand.before, after: cand.after) else {
+                fallbackNavigateAndReplace(cand); return
             }
 
             // Replace via setValue on whole string (works in many fields)
@@ -1183,20 +1255,8 @@ final class AppCoordinator: NSObject {
                 isSynthesizing = true
                 let ok = axSetStringValue(el, newText)
                 // Restore caret:
-                let originalLen = finalRange.length
                 let convertedLen = (cand.converted as NSString).length
-                let delta = convertedLen - originalLen
-                let afterWordIndex = finalRange.location + finalRange.length
-
-                let newCaret: Int
-                if caretBefore.location >= afterWordIndex {
-                    newCaret = caretBefore.location + delta
-                } else if caretBefore.location >= finalRange.location && caretBefore.location <= afterWordIndex {
-                    let insideOffset = caretBefore.location - finalRange.location
-                    newCaret = finalRange.location + min(insideOffset, convertedLen)
-                } else {
-                    newCaret = caretBefore.location
-                }
+                let newCaret = adjustedCaret(caretBefore.location, afterReplacing: finalRange, withLength: convertedLen)
                 _ = axSetSelectedRange(el, NSRange(location: max(0, newCaret), length: 0))
                 isSynthesizing = false
 
@@ -1232,22 +1292,10 @@ final class AppCoordinator: NSObject {
         }
 
         let ns = full as NSString
-        var finalRange = NSRange(location: cr.location, length: cr.length)
-        if finalRange.location + finalRange.length > ns.length ||
-           ns.substring(with: finalRange) != undo.corrected {
-            let windowStart = max(0, Int(cr.location) - 128)
-            let windowEnd = min(ns.length, Int(cr.location + cr.length) + 128)
-            let window = NSRange(location: windowStart, length: max(0, windowEnd - windowStart))
-            let needle = undo.before + undo.corrected + undo.after
-            var found = ns.range(of: needle, options: [], range: window)
-            if found.location != NSNotFound {
-                finalRange = NSRange(location: found.location + (undo.before as NSString).length,
-                                     length: (undo.corrected as NSString).length)
-            } else {
-                found = ns.range(of: undo.corrected, options: [.backwards], range: window)
-                guard found.location != NSNotFound else { return false }
-                finalRange = found
-            }
+        let initialRange = NSRange(location: cr.location, length: cr.length)
+        guard let finalRange = relocateRange(initialRange, in: ns, expecting: undo.corrected,
+                                             before: undo.before, after: undo.after) else {
+            return false
         }
 
         guard axSetSelectedRange(el, finalRange) else { return false }
@@ -1258,19 +1306,7 @@ final class AppCoordinator: NSObject {
         isSynthesizing = true
         let ok = axSetStringValue(el, newText)
         let originalLen = (undo.original as NSString).length
-        let correctedLen = finalRange.length
-        let delta = originalLen - correctedLen
-        let afterWordIndex = finalRange.location + finalRange.length
-
-        let newCaret: Int
-        if caretBefore.location >= afterWordIndex {
-            newCaret = caretBefore.location + delta
-        } else if caretBefore.location >= finalRange.location && caretBefore.location <= afterWordIndex {
-            let insideOffset = caretBefore.location - finalRange.location
-            newCaret = finalRange.location + min(insideOffset, originalLen)
-        } else {
-            newCaret = caretBefore.location
-        }
+        let newCaret = adjustedCaret(caretBefore.location, afterReplacing: finalRange, withLength: originalLen)
         _ = axSetSelectedRange(el, NSRange(location: max(0, newCaret), length: 0))
         isSynthesizing = false
 
@@ -1333,7 +1369,7 @@ final class AppCoordinator: NSObject {
             return
         }
         #endif
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + Timing.navReplace) {
             let curID = self.layoutManager.currentInputSourceID()
             let targetID = self.layoutID(forLanguagePrefix: cand.targetLangPrefix) ?? self.otherLayoutID()
             self.dlog("[NAVREP] start synth=\(self.isSynthesizing) curID=\(curID) targetID=\(targetID) buffer=\(self.wordParser.buffer)")
