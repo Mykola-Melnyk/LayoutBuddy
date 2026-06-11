@@ -1148,9 +1148,6 @@ final class AppCoordinator: NSObject {
         AXTextTarget(element: el).select(range)
     }
 
-    private func axSetStringValue(_ el: AXUIElement, _ newValue: String) -> Bool {
-        AXTextTarget(element: el).write(newValue)
-    }
 
     /// Re-locates a previously captured range inside the element's *current*
     /// text (it may have shifted as the user kept typing). Tries the stored
@@ -1205,10 +1202,10 @@ final class AppCoordinator: NSObject {
                        restoreLangPrefix: String) -> Bool {
         guard let plan else { return false }
         isSynthesizing = true
-        let ok = target.write(plan.newText)
+        // Replace just the word's range (not the whole field) so the app doesn't
+        // yank the caret to the start, then place the caret after the new word.
+        let ok = target.replace(plan.replacedRange, with: plan.replacement)
         if ok {
-            // Moving the *real* caret means any swallowed boundary baked into
-            // plan.newText ends up correctly placed.
             _ = target.select(NSRange(location: plan.newCaret, length: 0))
         }
         isSynthesizing = false
@@ -1403,7 +1400,7 @@ final class AppCoordinator: NSObject {
         // Try AX path
         if let el = cand.element, axPID(el) == cand.pid,
            let caretBefore = axSelectedRange(el),
-           var full = axStringValue(el) {
+           let full = axStringValue(el) {
 
             let ns = full as NSString
             guard let cr = cand.range else { fallbackNavigateAndReplace(cand); return }
@@ -1413,16 +1410,12 @@ final class AppCoordinator: NSObject {
                 fallbackNavigateAndReplace(cand); return
             }
 
-            // Replace via setValue on whole string (works in many fields)
+            // Replace just the selected word (setting the whole value would
+            // yank the caret to the start of the field).
             if axSetSelectedRange(el, finalRange) {
-                full = axStringValue(el) ?? full
-                let ns2 = full as NSString
-                let newText = ns2.replacingCharacters(in: finalRange, with: cand.converted)
-
-                isSynthesizing = true
-                let ok = axSetStringValue(el, newText)
-                // Restore caret:
                 let convertedLen = (cand.converted as NSString).length
+                isSynthesizing = true
+                let ok = AXTextTarget(element: el).replace(finalRange, with: cand.converted)
                 let newCaret = adjustedCaret(caretBefore.location, afterReplacing: finalRange, withLength: convertedLen)
                 _ = axSetSelectedRange(el, NSRange(location: max(0, newCaret), length: 0))
                 isSynthesizing = false
@@ -1453,7 +1446,7 @@ final class AppCoordinator: NSObject {
     private func applyAXUndo(_ undo: CorrectionUndo) -> Bool {
         guard let el = undo.element, axPID(el) == undo.pid,
               let caretBefore = axSelectedRange(el),
-              var full = axStringValue(el),
+              let full = axStringValue(el),
               let cr = undo.range else {
             return false
         }
@@ -1466,12 +1459,10 @@ final class AppCoordinator: NSObject {
         }
 
         guard axSetSelectedRange(el, finalRange) else { return false }
-        full = axStringValue(el) ?? full
-        let current = full as NSString
-        let newText = current.replacingCharacters(in: finalRange, with: undo.original)
-
+        // Replace just the selected word rather than rewriting the whole value,
+        // which would yank the caret to the start of the field.
         isSynthesizing = true
-        let ok = axSetStringValue(el, newText)
+        let ok = AXTextTarget(element: el).replace(finalRange, with: undo.original)
         let originalLen = (undo.original as NSString).length
         let newCaret = adjustedCaret(caretBefore.location, afterReplacing: finalRange, withLength: originalLen)
         _ = axSetSelectedRange(el, NSRange(location: max(0, newCaret), length: 0))

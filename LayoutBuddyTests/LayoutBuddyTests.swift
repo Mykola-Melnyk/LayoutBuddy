@@ -560,6 +560,15 @@ final class FakeTextTarget: TextTarget {
         return true
     }
 
+    func replace(_ range: NSRange, with text: String) -> Bool {
+        guard !failWrite else { return false }
+        let mutable = content.mutableCopy() as! NSMutableString
+        mutable.replaceCharacters(in: range, with: text)
+        content = mutable
+        writeCount += 1
+        return true
+    }
+
     func select(_ range: NSRange) -> Bool {
         caret = range
         selectCount += 1
