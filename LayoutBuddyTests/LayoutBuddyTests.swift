@@ -58,6 +58,108 @@ final class LayoutBuddyTests: XCTestCase {
         XCTAssertEqual(app.convert("hello", from: "en", to: "fr"), "hello")
     }
 
+    // MARK: - WordReplacementPlanner (pure index/string geometry)
+
+    private func planReplace(_ text: String, caret: Int, original: String,
+                             converted: String, boundary: UnicodeScalar? = nil,
+                             radius: Int = 8) -> WordReplacementPlanner.Plan? {
+        WordReplacementPlanner.planReplacement(
+            fullText: text as NSString, caret: caret,
+            original: original, converted: converted,
+            boundaryToInsert: boundary, contextRadius: radius)
+    }
+
+    func testPlanBakesSwallowedBoundary() {
+        // Normal boundary (space) was swallowed and must be reinserted.
+        let plan = planReplace("ghbdsn", caret: 6, original: "ghbdsn", converted: "привіт", boundary: " ")
+        XCTAssertEqual(plan?.newText, "привіт ")
+        XCTAssertEqual(plan?.newCaret, 7)
+        XCTAssertEqual(plan?.correctedRange, NSRange(location: 0, length: 6))
+    }
+
+    func testPlanLeavesExistingBoundary() {
+        // Special boundary (Enter) already in the document; gap == 1, none baked.
+        let plan = planReplace("ghbdsn\n", caret: 7, original: "ghbdsn", converted: "привіт")
+        XCTAssertEqual(plan?.newText, "привіт\n")
+        XCTAssertEqual(plan?.newCaret, 7)
+    }
+
+    func testPlanMidWordHasNoBoundary() {
+        let plan = planReplace("ghbdsn", caret: 6, original: "ghbdsn", converted: "привіт")
+        XCTAssertEqual(plan?.newText, "привіт")
+        XCTAssertEqual(plan?.newCaret, 6)
+    }
+
+    func testPlanReplacesWordWithPrecedingText() {
+        let plan = planReplace("hello ghbdsn", caret: 12, original: "ghbdsn", converted: "привіт", boundary: " ")
+        XCTAssertEqual(plan?.newText, "hello привіт ")
+        XCTAssertEqual(plan?.newCaret, 13)
+        XCTAssertEqual(plan?.correctedRange, NSRange(location: 6, length: 6))
+        XCTAssertEqual(plan?.before, "hello ")
+        XCTAssertEqual(plan?.after, " ")
+    }
+
+    func testPlanPicksMostRecentOccurrence() {
+        // `.backwards` search must target the just-typed word, not an earlier one.
+        let plan = planReplace("ghbdsn ghbdsn", caret: 13, original: "ghbdsn", converted: "привіт")
+        XCTAssertEqual(plan?.newText, "ghbdsn привіт")
+        XCTAssertEqual(plan?.correctedRange, NSRange(location: 7, length: 6))
+    }
+
+    func testPlanRefusesWhenLettersSitBetweenWordAndCaret() {
+        // A letter in the "gap" means we'd corrupt text — must bail (→ keystroke fallback).
+        XCTAssertNil(planReplace("ghbdsnx", caret: 7, original: "ghbdsn", converted: "привіт"))
+    }
+
+    func testPlanAllowsTwoCharBoundaryGapButNotThree() {
+        XCTAssertNotNil(planReplace("ghbdsn. ", caret: 8, original: "ghbdsn", converted: "привіт"))
+        XCTAssertNil(planReplace("ghbdsn   ", caret: 9, original: "ghbdsn", converted: "привіт"))
+    }
+
+    func testPlanRefusesWhenCaretBeforeWordStart() {
+        XCTAssertNil(planReplace("ghbdsn", caret: 3, original: "ghbdsn", converted: "привіт"))
+    }
+
+    func testPlanLastWordConvertsTrailingWord() {
+        let plan = WordReplacementPlanner.planLastWord(
+            fullText: "hello ghbdsn" as NSString, caret: 12,
+            convert: { $0 == "ghbdsn" ? "привіт" : $0 }, contextRadius: 8)
+        XCTAssertEqual(plan?.newText, "hello привіт")
+        XCTAssertEqual(plan?.correctedRange, NSRange(location: 6, length: 6))
+    }
+
+    func testPlanLastWordSkipsTrailingBoundary() {
+        let plan = WordReplacementPlanner.planLastWord(
+            fullText: "ghbdsn " as NSString, caret: 7,
+            convert: { $0 == "ghbdsn" ? "привіт" : $0 }, contextRadius: 8)
+        XCTAssertEqual(plan?.newText, "привіт ")
+        XCTAssertEqual(plan?.newCaret, 7)
+    }
+
+    func testPlanLastWordTreatsApostropheAsWordInternal() {
+        let plan = WordReplacementPlanner.planLastWord(
+            fullText: "qwe'rty" as NSString, caret: 7,
+            convert: { $0.uppercased() }, contextRadius: 8)
+        XCTAssertEqual(plan?.original, "qwe'rty")
+        XCTAssertEqual(plan?.newText, "QWE'RTY")
+    }
+
+    func testPlanLastWordNilWhenConversionIsNoOp() {
+        let plan = WordReplacementPlanner.planLastWord(
+            fullText: "hello" as NSString, caret: 5,
+            convert: { $0 }, contextRadius: 8)
+        XCTAssertNil(plan)
+    }
+
+    func testAdjustedCaretInsideAndAfterReplacedRange() {
+        // Caret inside the replaced word clamps to the new word length.
+        XCTAssertEqual(
+            WordReplacementPlanner.adjustedCaret(3, afterReplacing: NSRange(location: 0, length: 6), withLength: 4), 3)
+        // Caret after the word shifts by the length delta.
+        XCTAssertEqual(
+            WordReplacementPlanner.adjustedCaret(10, afterReplacing: NSRange(location: 2, length: 3), withLength: 5), 12)
+    }
+
     func testDeleteClearsBufferWithoutConversion() throws {
         let app = makeApp()
 

@@ -1141,33 +1141,47 @@ final class AppCoordinator: NSObject {
     private func adjustedCaret(_ caret: Int,
                                afterReplacing replacedRange: NSRange,
                                withLength newLength: Int) -> Int {
-        let delta = newLength - replacedRange.length
-        let afterIndex = replacedRange.location + replacedRange.length
-        if caret >= afterIndex {
-            return caret + delta
-        } else if caret >= replacedRange.location && caret <= afterIndex {
-            let insideOffset = caret - replacedRange.location
-            return replacedRange.location + min(insideOffset, newLength)
-        } else {
-            return caret
-        }
+        WordReplacementPlanner.adjustedCaret(caret, afterReplacing: replacedRange, withLength: newLength)
     }
 
     /// Surrounding text (±`contextRadius`) used to re-anchor a range during undo.
     private func axContext(around range: NSRange, in ns: NSString) -> (before: String, after: String) {
-        let beforeStart = max(0, range.location - contextRadius)
-        let before = ns.substring(with: NSRange(location: beforeStart, length: range.location - beforeStart))
-        let afterStart = range.location + range.length
-        let afterLen = min(contextRadius, max(0, ns.length - afterStart))
-        let after = ns.substring(with: NSRange(location: afterStart, length: afterLen))
-        return (before, after)
+        WordReplacementPlanner.context(around: range, in: ns, radius: contextRadius)
     }
 
-    /// Replaces a word sitting immediately before the caret in the focused
-    /// element using the Accessibility API — no synthetic keystrokes and no
-    /// layout-switch timing. Because `axSetSelectedRange` moves the *real*
-    /// caret, a boundary character that was swallowed from the event stream can
-    /// be baked straight into the edit.
+    /// Reads the focused element's text + caret. Returns nil when AX is
+    /// unavailable or there is an active selection (which we never clobber).
+    private func axEditableSnapshot() -> (element: AXUIElement, caret: Int, text: String)? {
+        guard let el = axFocusedElement(),
+              let caret = axSelectedRange(el), caret.length == 0,
+              let full = axStringValue(el) else { return nil }
+        return (el, caret.location, full)
+    }
+
+    /// Applies a computed `Plan` to the element via AX and records a precise
+    /// undo. Returns false (touching nothing observable) if the AX write fails,
+    /// so callers can fall back to synthetic keystrokes.
+    private func applyPlan(_ plan: WordReplacementPlanner.Plan,
+                           to el: AXUIElement,
+                           restoreLangPrefix: String) -> Bool {
+        isSynthesizing = true
+        let ok = axSetStringValue(el, plan.newText)
+        guard ok else { isSynthesizing = false; return false }
+        // Because this moves the *real* caret, any swallowed boundary baked into
+        // plan.newText ends up correctly placed.
+        _ = axSetSelectedRange(el, NSRange(location: plan.newCaret, length: 0))
+        isSynthesizing = false
+
+        rememberAXUndo(element: el, range: plan.correctedRange,
+                       original: plan.original, corrected: plan.converted,
+                       before: plan.before, after: plan.after,
+                       restoreLangPrefix: restoreLangPrefix)
+        return true
+    }
+
+    /// Replaces a *known* word sitting immediately before the caret in the
+    /// focused element using the Accessibility API — no synthetic keystrokes and
+    /// no layout-switch timing.
     ///
     /// Returns false (changing nothing observable) when AX is unavailable or the
     /// word can't be confidently located, so the caller can fall back to
@@ -1181,97 +1195,27 @@ final class AppCoordinator: NSObject {
                                           with converted: String,
                                           restoreLangPrefix: String,
                                           boundaryToInsert: UnicodeScalar?) -> Bool {
-        guard !original.isEmpty,
-              let el = axFocusedElement(),
-              let caret = axSelectedRange(el), caret.length == 0,
-              let full = axStringValue(el) else { return false }
-
-        let ns = full as NSString
-        let origLen = (original as NSString).length
-        guard caret.location >= origLen, caret.location <= ns.length else { return false }
-
-        // Most recent occurrence of `original` ending at — or within a short
-        // boundary gap of — the caret.
-        let found = ns.range(of: original, options: .backwards,
-                             range: NSRange(location: 0, length: caret.location))
-        guard found.location != NSNotFound else { return false }
-        let gap = caret.location - (found.location + found.length)
-        guard gap >= 0, gap <= 2 else { return false }
-        if gap > 0 {
-            // Anything between the word and the caret must be a boundary, never
-            // letters we'd silently corrupt.
-            let between = ns.substring(with: NSRange(location: found.location + found.length, length: gap))
-            guard between.unicodeScalars.allSatisfy({ !lbLetters.contains($0) }) else { return false }
-        }
-
-        var replacement = converted
-        if let boundary = boundaryToInsert { replacement.unicodeScalars.append(boundary) }
-        let replacementLen = (replacement as NSString).length
-        let convertedLen = (converted as NSString).length
-        let newText = ns.replacingCharacters(in: found, with: replacement)
-
-        isSynthesizing = true
-        let ok = axSetStringValue(el, newText)
-        guard ok else { isSynthesizing = false; return false }
-        let newCaret = adjustedCaret(caret.location, afterReplacing: found, withLength: replacementLen)
-        _ = axSetSelectedRange(el, NSRange(location: max(0, newCaret), length: 0))
-        isSynthesizing = false
-
-        // Precise undo targets the corrected word only (not any baked boundary).
-        // Anchor context against the resulting text so relocation stays accurate.
-        let correctedRange = NSRange(location: found.location, length: convertedLen)
-        let (before, after) = axContext(around: correctedRange, in: newText as NSString)
-        rememberAXUndo(element: el, range: correctedRange,
-                       original: original, corrected: converted,
-                       before: before, after: after,
-                       restoreLangPrefix: restoreLangPrefix)
-        return true
+        guard let snap = axEditableSnapshot(),
+              let plan = WordReplacementPlanner.planReplacement(
+                fullText: snap.text as NSString, caret: snap.caret,
+                original: original, converted: converted,
+                boundaryToInsert: boundaryToInsert, contextRadius: contextRadius)
+        else { return false }
+        return applyPlan(plan, to: snap.element, restoreLangPrefix: restoreLangPrefix)
     }
 
-    /// Finds the last word (run of letters / word-internal characters) at or
-    /// before the caret in the focused element and converts it in place via AX.
-    /// Used by the force-correct hotkey when there is no in-memory buffer.
-    /// Returns false if AX is unavailable or no convertible word is found.
+    /// Finds the last word at or before the caret in the focused element and
+    /// converts it in place via AX. Used by the force-correct hotkey when there
+    /// is no in-memory buffer. Returns false if AX is unavailable or no
+    /// convertible word is found.
     private func axCorrectLastWordInDocument(curLangPrefix: String, targetLangPrefix: String) -> Bool {
-        guard let el = axFocusedElement(),
-              let caret = axSelectedRange(el), caret.length == 0,
-              let full = axStringValue(el) else { return false }
-
-        let ns = full as NSString
-        guard caret.location > 0, caret.location <= ns.length else { return false }
-
-        func isWordChar(at index: Int) -> Bool {
-            let s = ns.substring(with: NSRange(location: index, length: 1))
-            return s.unicodeScalars.allSatisfy { lbLetters.contains($0) || wordParser.isWordInternal($0) }
-        }
-
-        var end = caret.location
-        while end > 0, !isWordChar(at: end - 1) { end -= 1 }   // skip trailing boundaries
-        guard end > 0 else { return false }
-        var start = end
-        while start > 0, isWordChar(at: start - 1) { start -= 1 }
-        guard start < end else { return false }
-
-        let wordRange = NSRange(location: start, length: end - start)
-        let original = ns.substring(with: wordRange)
-        let converted = convert(original, from: curLangPrefix, to: targetLangPrefix)
-        guard converted != original else { return false }
-
-        let newText = ns.replacingCharacters(in: wordRange, with: converted)
-        isSynthesizing = true
-        let ok = axSetStringValue(el, newText)
-        guard ok else { isSynthesizing = false; return false }
-        let newCaret = adjustedCaret(caret.location, afterReplacing: wordRange, withLength: (converted as NSString).length)
-        _ = axSetSelectedRange(el, NSRange(location: max(0, newCaret), length: 0))
-        isSynthesizing = false
-
-        let correctedRange = NSRange(location: wordRange.location, length: (converted as NSString).length)
-        let (before, after) = axContext(around: correctedRange, in: newText as NSString)
-        rememberAXUndo(element: el, range: correctedRange,
-                       original: original, corrected: converted,
-                       before: before, after: after,
-                       restoreLangPrefix: curLangPrefix)
-        return true
+        guard let snap = axEditableSnapshot(),
+              let plan = WordReplacementPlanner.planLastWord(
+                fullText: snap.text as NSString, caret: snap.caret,
+                convert: { self.convert($0, from: curLangPrefix, to: targetLangPrefix) },
+                contextRadius: contextRadius)
+        else { return false }
+        return applyPlan(plan, to: snap.element, restoreLangPrefix: curLangPrefix)
     }
 
     // If AX fails at capture time, push a "blind" candidate so hotkey can still fix it.
@@ -1727,5 +1671,144 @@ extension AppCoordinator {
 extension AppCoordinator: EventTapControllerDelegate {
     func handle(event: CGEvent) -> Unmanaged<CGEvent>? {
         handleKeyEvent(event)
+    }
+}
+
+// MARK: - Word-replacement geometry (pure, AX-free, unit-testable)
+
+/// The string/index math behind the in-place word corrections, separated from
+/// the Accessibility get/set so the risky parts — word location, boundary-gap
+/// tolerance, caret adjustment, and boundary baking — can be unit-tested with
+/// plain strings instead of a live `AXUIElement`.
+enum WordReplacementPlanner {
+
+    /// A fully-computed edit: the resulting text, where the caret should land,
+    /// the range now occupied by the corrected word, and the surrounding
+    /// context (used to re-anchor an undo).
+    struct Plan: Equatable {
+        let original: String
+        let converted: String
+        let newText: String
+        let newCaret: Int
+        let correctedRange: NSRange
+        let before: String
+        let after: String
+    }
+
+    private static let letters = CharacterSet.letters
+    private static let wordInternal = Set("'’-".unicodeScalars)
+
+    private static func isLetter(_ s: UnicodeScalar) -> Bool { letters.contains(s) }
+    private static func isWordChar(_ s: UnicodeScalar) -> Bool { letters.contains(s) || wordInternal.contains(s) }
+
+    /// Plan replacing a *known* `original` word that sits immediately before the
+    /// caret with `converted`, optionally baking a swallowed boundary after it.
+    /// Returns nil when the word can't be confidently located (caller falls back
+    /// to synthetic keystrokes).
+    static func planReplacement(fullText ns: NSString,
+                                caret: Int,
+                                original: String,
+                                converted: String,
+                                boundaryToInsert: UnicodeScalar?,
+                                contextRadius: Int) -> Plan? {
+        guard !original.isEmpty else { return nil }
+        let origLen = (original as NSString).length
+        guard caret >= origLen, caret <= ns.length else { return nil }
+
+        // Most recent occurrence of `original` ending at — or within a short
+        // boundary gap of — the caret.
+        let found = ns.range(of: original, options: .backwards,
+                             range: NSRange(location: 0, length: caret))
+        guard found.location != NSNotFound else { return nil }
+        let gap = caret - (found.location + found.length)
+        guard gap >= 0, gap <= 2 else { return nil }
+        if gap > 0 {
+            // Anything between the word and the caret must be a boundary, never
+            // letters we'd silently corrupt.
+            let between = ns.substring(with: NSRange(location: found.location + found.length, length: gap))
+            guard between.unicodeScalars.allSatisfy({ !isLetter($0) }) else { return nil }
+        }
+        return finish(ns: ns, caret: caret, wordRange: found, original: original,
+                      converted: converted, boundaryToInsert: boundaryToInsert,
+                      contextRadius: contextRadius)
+    }
+
+    /// Plan converting the last word (letters + word-internal chars) at or
+    /// before the caret, computing the original from the text itself. Used by
+    /// force-correct when there is no known original string. `convert` performs
+    /// the layout conversion; the plan is nil when conversion is a no-op.
+    static func planLastWord(fullText ns: NSString,
+                             caret: Int,
+                             convert: (String) -> String,
+                             contextRadius: Int) -> Plan? {
+        guard caret > 0, caret <= ns.length else { return nil }
+
+        var end = caret
+        while end > 0, !isWordChar(scalar(ns, end - 1)) { end -= 1 }   // skip trailing boundaries
+        guard end > 0 else { return nil }
+        var start = end
+        while start > 0, isWordChar(scalar(ns, start - 1)) { start -= 1 }
+        guard start < end else { return nil }
+
+        let wordRange = NSRange(location: start, length: end - start)
+        let original = ns.substring(with: wordRange)
+        let converted = convert(original)
+        guard converted != original else { return nil }
+        return finish(ns: ns, caret: caret, wordRange: wordRange, original: original,
+                      converted: converted, boundaryToInsert: nil,
+                      contextRadius: contextRadius)
+    }
+
+    private static func finish(ns: NSString,
+                               caret: Int,
+                               wordRange: NSRange,
+                               original: String,
+                               converted: String,
+                               boundaryToInsert: UnicodeScalar?,
+                               contextRadius: Int) -> Plan {
+        var replacement = converted
+        if let boundary = boundaryToInsert { replacement.unicodeScalars.append(boundary) }
+        let replacementLen = (replacement as NSString).length
+        let convertedLen = (converted as NSString).length
+        let newText = ns.replacingCharacters(in: wordRange, with: replacement) as NSString
+
+        let newCaret = max(0, adjustedCaret(caret, afterReplacing: wordRange, withLength: replacementLen))
+        // Undo targets the corrected word only (not any baked boundary); anchor
+        // its context against the resulting text so relocation stays accurate.
+        let correctedRange = NSRange(location: wordRange.location, length: convertedLen)
+        let (before, after) = context(around: correctedRange, in: newText, radius: contextRadius)
+        return Plan(original: original, converted: converted,
+                    newText: newText as String, newCaret: newCaret,
+                    correctedRange: correctedRange, before: before, after: after)
+    }
+
+    private static func scalar(_ ns: NSString, _ index: Int) -> UnicodeScalar {
+        let s = ns.substring(with: NSRange(location: index, length: 1))
+        return s.unicodeScalars.first ?? UnicodeScalar(0)
+    }
+
+    /// Where the caret should land after `replacedRange` is swapped for text of
+    /// length `newLength`.
+    static func adjustedCaret(_ caret: Int, afterReplacing replacedRange: NSRange, withLength newLength: Int) -> Int {
+        let delta = newLength - replacedRange.length
+        let afterIndex = replacedRange.location + replacedRange.length
+        if caret >= afterIndex {
+            return caret + delta
+        } else if caret >= replacedRange.location && caret <= afterIndex {
+            let insideOffset = caret - replacedRange.location
+            return replacedRange.location + min(insideOffset, newLength)
+        } else {
+            return caret
+        }
+    }
+
+    /// Surrounding text (±`radius`) used to re-anchor a range during undo.
+    static func context(around range: NSRange, in ns: NSString, radius: Int) -> (before: String, after: String) {
+        let beforeStart = max(0, range.location - radius)
+        let before = ns.substring(with: NSRange(location: beforeStart, length: range.location - beforeStart))
+        let afterStart = range.location + range.length
+        let afterLen = min(radius, max(0, ns.length - afterStart))
+        let after = ns.substring(with: NSRange(location: afterStart, length: afterLen))
+        return (before, after)
     }
 }
