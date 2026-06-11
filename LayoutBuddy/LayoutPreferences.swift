@@ -27,24 +27,14 @@ final class LayoutPreferences {
         let manager = KeyboardLayoutManager(preferences: self)
         let current = manager.currentInputSourceID()
         if !current.isEmpty { return current }
-        let all = manager.listSelectableKeyboardLayouts()
-        if let us = all.first(where: { $0.id == "com.apple.keylayout.US" }) { return us.id }
-        if let abc = all.first(where: { $0.id == "com.apple.keylayout.ABC" }) { return abc.id }
-        return all.first?.id ?? "com.apple.keylayout.US"
+        return KeyboardLayoutManager.selectPrimary(current: current,
+                                                   available: manager.listSelectableKeyboardLayouts())
     }
 
     func autoDetectSecondaryID() -> String {
         let manager = KeyboardLayoutManager(preferences: self)
-        let primary = primaryID
-        let all = manager.listSelectableKeyboardLayouts()
-        let primaryLang = all.first(where: { $0.id == primary })?.languages.first ?? ""
-        let desiredPrefix = primaryLang.hasPrefix("en") ? "uk" : "en"
-        if let differentLang = all.first(where: {
-            $0.languages.contains(where: { $0.hasPrefix(desiredPrefix) }) && $0.id != primary
-        }) {
-            return differentLang.id
-        }
-        return all.first(where: { $0.id != primary })?.id ?? primary
+        return KeyboardLayoutManager.selectSecondary(primary: primaryID,
+                                                     available: manager.listSelectableKeyboardLayouts())
     }
 
     // MARK: - Hotkeys
