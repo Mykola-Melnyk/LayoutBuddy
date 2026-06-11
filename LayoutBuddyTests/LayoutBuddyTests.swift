@@ -442,6 +442,62 @@ final class LayoutBuddyTests: XCTestCase {
         XCTAssertEqual(app.testCapturedText(), "")
     }
 
+    // MARK: - Key-event routing
+
+    func testConversionDisabledLetsKeystrokesPassThroughUnbuffered() throws {
+        let suiteName = UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let prefs = LayoutPreferences(defaults: defaults)
+        let app = makeApp(preferences: prefs)
+
+        let toggle = try keyEvent(
+            keyCode: prefs.toggleHotkey.keyCode,
+            flags: CGEventFlags(rawValue: UInt64(prefs.toggleHotkey.modifiers.rawValue)))
+        _ = app.testHandleKeyEvent(type: .keyDown, event: toggle)
+        XCTAssertFalse(app.testConversionOn)
+
+        let letter = try keyEvent(character: "a")
+        let returned = app.testHandleKeyEvent(type: .keyDown, event: letter)?.takeUnretainedValue()
+        XCTAssertTrue(returned === letter)
+        XCTAssertTrue(app.testWordBuffer.isEmpty)
+    }
+
+    func testCommandShortcutPassesThroughWithoutBuffering() throws {
+        let app = makeApp()
+        app.testWordBuffer = "hel"
+
+        let event = try keyEvent(character: "a", flags: .maskCommand)
+        let returned = app.testHandleKeyEvent(type: .keyDown, event: event)?.takeUnretainedValue()
+
+        XCTAssertTrue(returned === event)
+        XCTAssertEqual(app.testWordBuffer, "hel")   // shortcut must not edit the word buffer
+    }
+
+    func testOptionComboPassesThroughWithoutBuffering() throws {
+        let app = makeApp()
+        app.testWordBuffer = "hel"
+
+        let event = try keyEvent(character: "s", flags: .maskAlternate)
+        let returned = app.testHandleKeyEvent(type: .keyDown, event: event)?.takeUnretainedValue()
+
+        XCTAssertTrue(returned === event)
+        XCTAssertEqual(app.testWordBuffer, "hel")
+    }
+
+    func testValidEnglishWordIsNotConverted() throws {
+        let app = makeApp()
+
+        try type("hello", into: app)
+        let space = try keyEvent(character: " ")
+        let returned = app.testHandleKeyEvent(type: .keyDown, event: space)?.takeUnretainedValue()
+
+        XCTAssertTrue(returned === space)            // boundary passes through, not swallowed
+        XCTAssertEqual(app.testCapturedText(), "")   // nothing replaced
+        XCTAssertTrue(app.testWordBuffer.isEmpty)
+    }
+
     private func makeApp(preferences: LayoutPreferences = LayoutPreferences()) -> AppCoordinator {
         let app = AppCoordinator(preferences: preferences)
         app.testSetSimulationMode(true)
@@ -508,5 +564,173 @@ final class FakeTextTarget: TextTarget {
         caret = range
         selectCount += 1
         return true
+    }
+}
+
+// MARK: - WordParser
+
+final class WordParserTests: XCTestCase {
+    private func scalar(_ string: String) -> UnicodeScalar { string.unicodeScalars.first! }
+
+    func testSplitTrailingMappedStripsTrailingPunctuation() {
+        let p = WordParser()
+        XCTAssertEqual(p.splitTrailingMapped("привіт").core, "привіт")
+        XCTAssertEqual(p.splitTrailingMapped("привіт").trailingCount, 0)
+
+        let one = p.splitTrailingMapped("будь.")
+        XCTAssertEqual(one.core, "будь")
+        XCTAssertEqual(one.trailingCount, 1)
+
+        let three = p.splitTrailingMapped("test.,;")
+        XCTAssertEqual(three.core, "test")
+        XCTAssertEqual(three.trailingCount, 3)
+
+        XCTAssertEqual(p.splitTrailingMapped(".,;").core, "")
+        XCTAssertEqual(p.splitTrailingMapped("a.b").core, "a.b")   // non-trailing dot is kept
+    }
+
+    func testContainsSuspiciousMappedExcludesApostrophe() {
+        let p = WordParser()
+        XCTAssertFalse(p.containsSuspiciousMapped("ghbdsn"))
+        XCTAssertTrue(p.containsSuspiciousMapped("ghbdsn."))
+        XCTAssertTrue(p.containsSuspiciousMapped("a,b"))
+        XCTAssertTrue(p.containsSuspiciousMapped("[x]"))
+        XCTAssertTrue(p.containsSuspiciousMapped("two words"))      // space counts
+        XCTAssertFalse(p.containsSuspiciousMapped("it's"))          // apostrophe excluded
+    }
+
+    func testIsMappedLatinPunctuation() {
+        let p = WordParser()
+        for c in "[];',." { XCTAssertTrue(p.isMappedLatinPunctuation(scalar(String(c))), "\(c)") }
+        XCTAssertFalse(p.isMappedLatinPunctuation(scalar("/")))
+        XCTAssertFalse(p.isMappedLatinPunctuation(scalar("a")))
+    }
+
+    func testIsWordInternal() {
+        let p = WordParser()
+        XCTAssertTrue(p.isWordInternal(scalar("'")))
+        XCTAssertTrue(p.isWordInternal(scalar("’")))
+        XCTAssertTrue(p.isWordInternal(scalar("-")))
+        XCTAssertFalse(p.isWordInternal(scalar("a")))
+        XCTAssertFalse(p.isWordInternal(scalar(" ")))
+    }
+
+    func testIsBoundary() {
+        let p = WordParser()
+        XCTAssertTrue(p.isBoundary(scalar(" ")))
+        XCTAssertTrue(p.isBoundary(scalar(".")))
+        XCTAssertTrue(p.isBoundary(scalar("!")))
+        XCTAssertFalse(p.isBoundary(scalar("-")))   // word-internal, not a boundary
+        XCTAssertFalse(p.isBoundary(scalar("'")))   // word-internal
+        XCTAssertFalse(p.isBoundary(scalar("a")))
+    }
+
+    func testLetterClassification() {
+        let p = WordParser()
+        XCTAssertTrue(p.isLatinLetter(scalar("a")))
+        XCTAssertTrue(p.isLatinLetter(scalar("Z")))
+        XCTAssertFalse(p.isLatinLetter(scalar("я")))
+        XCTAssertFalse(p.isLatinLetter(scalar("1")))
+
+        XCTAssertTrue(p.isCyrillicLetter(scalar("я")))
+        XCTAssertTrue(p.isCyrillicLetter(scalar("ї")))
+        XCTAssertTrue(p.isCyrillicLetter(scalar("ґ")))
+        XCTAssertFalse(p.isCyrillicLetter(scalar("a")))
+    }
+
+    func testBufferAppendCompleteAndClear() {
+        let p = WordParser()
+        XCTAssertNil(p.completeWord())                       // empty buffer → nil
+        for sc in "hi".unicodeScalars { p.append(character: sc) }
+        XCTAssertEqual(p.buffer, "hi")
+        XCTAssertEqual(p.completeWord(), "hi")               // returns and clears
+        XCTAssertTrue(p.buffer.isEmpty)
+        XCTAssertNil(p.completeWord())
+    }
+
+    func testRemoveLastIsSafeOnEmptyBuffer() {
+        let p = WordParser()
+        p.removeLast()                                       // must not crash
+        XCTAssertTrue(p.buffer.isEmpty)
+        for sc in "ab".unicodeScalars { p.append(character: sc) }
+        p.removeLast()
+        XCTAssertEqual(p.buffer, "a")
+        p.clear()
+        XCTAssertTrue(p.buffer.isEmpty)
+    }
+}
+
+// MARK: - Hotkey
+
+final class HotkeyTests: XCTestCase {
+    func testCodableRoundTrip() throws {
+        let hk = Hotkey(keyCode: CGKeyCode(kVK_ANSI_Z),
+                        modifiers: [.control, .option, .command],
+                        display: "⌃⌥⌘Z")
+        let data = try JSONEncoder().encode(hk)
+        let decoded = try JSONDecoder().decode(Hotkey.self, from: data)
+
+        XCTAssertEqual(decoded, hk)
+        XCTAssertEqual(decoded.keyCode, CGKeyCode(kVK_ANSI_Z))
+        XCTAssertEqual(decoded.modifiers, [.control, .option, .command])
+        XCTAssertEqual(decoded.display, "⌃⌥⌘Z")
+    }
+
+    func testEquatable() {
+        let a = Hotkey(keyCode: 1, modifiers: [.command], display: "x")
+        let b = Hotkey(keyCode: 1, modifiers: [.command], display: "x")
+        let c = Hotkey(keyCode: 2, modifiers: [.command], display: "x")
+        XCTAssertEqual(a, b)
+        XCTAssertNotEqual(a, c)
+    }
+}
+
+// MARK: - LayoutPreferences
+
+final class LayoutPreferencesTests: XCTestCase {
+    private func freshDefaults() throws -> (defaults: UserDefaults, name: String) {
+        let name = UUID().uuidString
+        return (try XCTUnwrap(UserDefaults(suiteName: name)), name)
+    }
+
+    func testDefaultHotkeysWhenNothingStored() throws {
+        let (defaults, name) = try freshDefaults()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let prefs = LayoutPreferences(defaults: defaults)
+
+        XCTAssertEqual(prefs.toggleHotkey,
+                       Hotkey(keyCode: CGKeyCode(kVK_ANSI_0), modifiers: [.control, .option, .command], display: "⌃⌥⌘0"))
+        XCTAssertEqual(prefs.convertHotkey,
+                       Hotkey(keyCode: CGKeyCode(kVK_Space), modifiers: [.control, .option], display: "⌃⌥Space"))
+        XCTAssertEqual(prefs.forceCorrectHotkey,
+                       Hotkey(keyCode: CGKeyCode(kVK_ANSI_F), modifiers: [.control, .option, .command], display: "⌃⌥⌘F"))
+        XCTAssertEqual(prefs.undoCorrectionHotkey,
+                       Hotkey(keyCode: CGKeyCode(kVK_ANSI_Z), modifiers: [.control, .option, .command], display: "⌃⌥⌘Z"))
+    }
+
+    func testHotkeyPersistsAndRoundTrips() throws {
+        let (defaults, name) = try freshDefaults()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let prefs = LayoutPreferences(defaults: defaults)
+
+        let custom = Hotkey(keyCode: CGKeyCode(kVK_ANSI_K), modifiers: [.command], display: "⌘K")
+        prefs.toggleHotkey = custom
+
+        XCTAssertEqual(prefs.toggleHotkey, custom)
+        // A fresh instance over the same store reads back the persisted value.
+        XCTAssertEqual(LayoutPreferences(defaults: defaults).toggleHotkey, custom)
+    }
+
+    func testLayoutIDsPersist() throws {
+        let (defaults, name) = try freshDefaults()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let prefs = LayoutPreferences(defaults: defaults)
+
+        prefs.primaryID = "com.apple.keylayout.US"
+        prefs.secondaryID = "com.apple.keylayout.Ukrainian-PC"
+
+        XCTAssertEqual(prefs.primaryID, "com.apple.keylayout.US")
+        XCTAssertEqual(prefs.secondaryID, "com.apple.keylayout.Ukrainian-PC")
+        XCTAssertEqual(LayoutPreferences(defaults: defaults).primaryID, "com.apple.keylayout.US")
     }
 }
