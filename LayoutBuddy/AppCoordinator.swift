@@ -35,6 +35,7 @@ final class AppCoordinator: NSObject {
     private let preferences: LayoutPreferences
     private let layoutManager: KeyboardLayoutManager
     private let menuBar: MenuBarController
+    private let permissions = PermissionsManager()
     private var conversionOn = true
     
     // Toggle diagnostics here
@@ -198,6 +199,10 @@ final class AppCoordinator: NSObject {
             self?.openSettingsWindow()
         }
 
+        menuBar.onOpenPermissions = { [weak self] in
+            self?.presentOnboarding()
+        }
+
         menuBar.onForceCorrectLastWord = { [weak self] in
             self?.forceCorrectLastWord()
         }
@@ -219,10 +224,61 @@ final class AppCoordinator: NSObject {
         if !eventTapController.start() {
             dlog("[EVENT TAP] failed to start; check Input Monitoring and Accessibility permissions")
         }
+        // Walk the user through granting Accessibility + Input Monitoring on
+        // first launch (or whenever a permission is missing).
+        permissions.refresh()
+        if !permissions.allGranted {
+            presentOnboarding()
+        }
     }
 
     func stop() {
         eventTapController.stop()
+    }
+
+    // MARK: - Onboarding / permissions
+
+    private var onboardingWindow: NSWindow?
+
+    private func presentOnboarding() {
+        let show: () -> Void = { [self] in
+            permissions.refresh()
+            if let window = onboardingWindow {
+                NSApp.activate(ignoringOtherApps: true)
+                window.makeKeyAndOrderFront(nil)
+                return
+            }
+
+            let view = OnboardingView(permissions: permissions) { [weak self] in
+                self?.finishOnboarding()
+            }
+            let window = NSWindow(contentViewController: NSHostingController(rootView: view))
+            window.title = "LayoutBuddy"
+            window.styleMask = [.titled, .closable]
+            window.center()
+            window.isReleasedWhenClosed = false
+
+            NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
+                self?.onboardingWindow = nil
+            }
+
+            onboardingWindow = window
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+        }
+
+        if Thread.isMainThread {
+            show()
+        } else {
+            DispatchQueue.main.async(execute: show)
+        }
+    }
+
+    private func finishOnboarding() {
+        permissions.refresh()
+        // Input Monitoring may now be granted — (re)try starting the event tap.
+        _ = eventTapController.start()
+        onboardingWindow?.close()
     }
 
     // MARK: - Settings
