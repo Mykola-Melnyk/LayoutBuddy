@@ -1051,24 +1051,15 @@ final class AppCoordinator: NSObject {
         var pid: pid_t = 0; AXUIElementGetPid(el, &pid); return pid
     }
 
+    // The raw AX value/selected-range marshalling lives in `AXTextTarget`; these
+    // keep the existing element-based call sites (ambiguity/undo) working while
+    // sharing a single implementation.
     private func axStringValue(_ el: AXUIElement) -> String? {
-        var ref: CFTypeRef?
-        if AXUIElementCopyAttributeValue(el, kAXValueAttribute as CFString, &ref) == .success,
-           let s = ref as? String { return s }
-        return nil
+        AXTextTarget(element: el).text
     }
 
     private func axSelectedRange(_ el: AXUIElement) -> NSRange? {
-        var ref: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(el, kAXSelectedTextRangeAttribute as CFString, &ref) == .success,
-              let val = ref,
-              CFGetTypeID(val) == AXValueGetTypeID() else { return nil }
-        let axVal = val as! AXValue
-        var cfr = CFRange(location: 0, length: 0)
-        if AXValueGetType(axVal) == .cfRange, AXValueGetValue(axVal, .cfRange, &cfr) {
-            return NSRange(location: cfr.location, length: cfr.length)
-        }
-        return nil
+        AXTextTarget(element: el).selection
     }
 
     private func axStringForRange(_ el: AXUIElement, _ range: CFRange) -> String? {
@@ -1098,13 +1089,11 @@ final class AppCoordinator: NSObject {
     }
 
     private func axSetSelectedRange(_ el: AXUIElement, _ range: NSRange) -> Bool {
-        var cfr = CFRange(location: range.location, length: range.length)
-        guard let v = AXValueCreate(.cfRange, &cfr) else { return false }
-        return AXUIElementSetAttributeValue(el, kAXSelectedTextRangeAttribute as CFString, v) == .success
+        AXTextTarget(element: el).select(range)
     }
 
     private func axSetStringValue(_ el: AXUIElement, _ newValue: String) -> Bool {
-        AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, newValue as CFTypeRef) == .success
+        AXTextTarget(element: el).write(newValue)
     }
 
     /// Re-locates a previously captured range inside the element's *current*
@@ -1149,73 +1138,91 @@ final class AppCoordinator: NSObject {
         WordReplacementPlanner.context(around: range, in: ns, radius: contextRadius)
     }
 
-    /// Reads the focused element's text + caret. Returns nil when AX is
-    /// unavailable or there is an active selection (which we never clobber).
-    private func axEditableSnapshot() -> (element: AXUIElement, caret: Int, text: String)? {
-        guard let el = axFocusedElement(),
-              let caret = axSelectedRange(el), caret.length == 0,
-              let full = axStringValue(el) else { return nil }
-        return (el, caret.location, full)
-    }
-
-    /// Applies a computed `Plan` to the element via AX and records a precise
-    /// undo. Returns false (touching nothing observable) if the AX write fails,
-    /// so callers can fall back to synthetic keystrokes.
-    private func applyPlan(_ plan: WordReplacementPlanner.Plan,
-                           to el: AXUIElement,
-                           restoreLangPrefix: String) -> Bool {
+    /// Writes a computed `Plan` to a text target and records a precise undo when
+    /// the target is backed by an AX element. Returns false (touching nothing
+    /// observable) if the plan is nil or the write fails, so callers can fall
+    /// back to synthetic keystrokes. Drives either a live element or a fake, so
+    /// the whole read→plan→write→caret cycle is unit-testable.
+    @discardableResult
+    private func apply(_ plan: WordReplacementPlanner.Plan?,
+                       on target: TextTarget,
+                       restoreLangPrefix: String) -> Bool {
+        guard let plan else { return false }
         isSynthesizing = true
-        let ok = axSetStringValue(el, plan.newText)
-        guard ok else { isSynthesizing = false; return false }
-        // Because this moves the *real* caret, any swallowed boundary baked into
-        // plan.newText ends up correctly placed.
-        _ = axSetSelectedRange(el, NSRange(location: plan.newCaret, length: 0))
+        let ok = target.write(plan.newText)
+        if ok {
+            // Moving the *real* caret means any swallowed boundary baked into
+            // plan.newText ends up correctly placed.
+            _ = target.select(NSRange(location: plan.newCaret, length: 0))
+        }
         isSynthesizing = false
+        guard ok else { return false }
 
-        rememberAXUndo(element: el, range: plan.correctedRange,
-                       original: plan.original, corrected: plan.converted,
-                       before: plan.before, after: plan.after,
-                       restoreLangPrefix: restoreLangPrefix)
+        if let el = target.axElement {
+            rememberAXUndo(element: el, range: plan.correctedRange,
+                           original: plan.original, corrected: plan.converted,
+                           before: plan.before, after: plan.after,
+                           restoreLangPrefix: restoreLangPrefix)
+        }
         return true
     }
 
-    /// Replaces a *known* word sitting immediately before the caret in the
-    /// focused element using the Accessibility API — no synthetic keystrokes and
-    /// no layout-switch timing.
-    ///
-    /// Returns false (changing nothing observable) when AX is unavailable or the
-    /// word can't be confidently located, so the caller can fall back to
-    /// synthetic keystrokes.
+    /// Replaces a *known* word sitting immediately before the caret in `target`
+    /// — no synthetic keystrokes and no layout-switch timing. Returns false when
+    /// the target is unreadable, has an active selection, or the word can't be
+    /// confidently located, so the caller can fall back to synthetic keystrokes.
     ///
     /// - Parameter boundaryToInsert: a boundary (space/punctuation) that was
     ///   swallowed and must be reinserted after the corrected word. Pass nil
     ///   when the boundary is still in the document or when correcting mid-word.
     @discardableResult
+    func replaceWord(on target: TextTarget,
+                     original: String,
+                     converted: String,
+                     boundaryToInsert: UnicodeScalar?,
+                     restoreLangPrefix: String) -> Bool {
+        guard let text = target.text,
+              let sel = target.selection, sel.length == 0 else { return false }
+        let plan = WordReplacementPlanner.planReplacement(
+            fullText: text as NSString, caret: sel.location,
+            original: original, converted: converted,
+            boundaryToInsert: boundaryToInsert, contextRadius: contextRadius)
+        return apply(plan, on: target, restoreLangPrefix: restoreLangPrefix)
+    }
+
+    /// Finds the last word at or before the caret in `target` and converts it in
+    /// place. Used by force-correct when there is no in-memory buffer. Returns
+    /// false if the target is unreadable or no convertible word is found.
+    @discardableResult
+    func correctLastWord(on target: TextTarget,
+                         convert: (String) -> String,
+                         restoreLangPrefix: String) -> Bool {
+        guard let text = target.text,
+              let sel = target.selection, sel.length == 0 else { return false }
+        let plan = WordReplacementPlanner.planLastWord(
+            fullText: text as NSString, caret: sel.location,
+            convert: convert, contextRadius: contextRadius)
+        return apply(plan, on: target, restoreLangPrefix: restoreLangPrefix)
+    }
+
+    // AX entry points: resolve the focused element, then run the shared seam.
+    @discardableResult
     private func axReplaceWordBeforeCaret(original: String,
                                           with converted: String,
                                           restoreLangPrefix: String,
                                           boundaryToInsert: UnicodeScalar?) -> Bool {
-        guard let snap = axEditableSnapshot(),
-              let plan = WordReplacementPlanner.planReplacement(
-                fullText: snap.text as NSString, caret: snap.caret,
-                original: original, converted: converted,
-                boundaryToInsert: boundaryToInsert, contextRadius: contextRadius)
-        else { return false }
-        return applyPlan(plan, to: snap.element, restoreLangPrefix: restoreLangPrefix)
+        guard let el = axFocusedElement() else { return false }
+        return replaceWord(on: AXTextTarget(element: el),
+                           original: original, converted: converted,
+                           boundaryToInsert: boundaryToInsert,
+                           restoreLangPrefix: restoreLangPrefix)
     }
 
-    /// Finds the last word at or before the caret in the focused element and
-    /// converts it in place via AX. Used by the force-correct hotkey when there
-    /// is no in-memory buffer. Returns false if AX is unavailable or no
-    /// convertible word is found.
     private func axCorrectLastWordInDocument(curLangPrefix: String, targetLangPrefix: String) -> Bool {
-        guard let snap = axEditableSnapshot(),
-              let plan = WordReplacementPlanner.planLastWord(
-                fullText: snap.text as NSString, caret: snap.caret,
-                convert: { self.convert($0, from: curLangPrefix, to: targetLangPrefix) },
-                contextRadius: contextRadius)
-        else { return false }
-        return applyPlan(plan, to: snap.element, restoreLangPrefix: curLangPrefix)
+        guard let el = axFocusedElement() else { return false }
+        return correctLastWord(on: AXTextTarget(element: el),
+                               convert: { self.convert($0, from: curLangPrefix, to: targetLangPrefix) },
+                               restoreLangPrefix: curLangPrefix)
     }
 
     // If AX fails at capture time, push a "blind" candidate so hotkey can still fix it.
@@ -1810,5 +1817,65 @@ enum WordReplacementPlanner {
         let afterLen = min(radius, max(0, ns.length - afterStart))
         let after = ns.substring(with: NSRange(location: afterStart, length: afterLen))
         return (before, after)
+    }
+}
+
+// MARK: - Editable text target (AX seam)
+
+/// Abstracts the read/write of a focused editable control so the word-edit
+/// orchestration can run against either a live Accessibility element or an
+/// in-memory fake in tests.
+protocol TextTarget: AnyObject {
+    /// Full text of the control, or nil if unavailable.
+    var text: String? { get }
+    /// Current selection; `length == 0` is a plain caret. Nil if unavailable.
+    var selection: NSRange? { get }
+    /// Replaces the whole value. Returns false if the control rejected the write.
+    @discardableResult func write(_ newText: String) -> Bool
+    /// Moves the caret / selection. Returns false on failure.
+    @discardableResult func select(_ range: NSRange) -> Bool
+    /// The backing AX element when one exists (enables precise undo); nil for
+    /// non-AX targets such as the test fake.
+    var axElement: AXUIElement? { get }
+}
+
+/// Production `TextTarget` backed by a live `AXUIElement`. This is the single
+/// home for the AX value/selected-range marshalling.
+final class AXTextTarget: TextTarget {
+    private let element: AXUIElement
+    init(element: AXUIElement) { self.element = element }
+
+    var axElement: AXUIElement? { element }
+
+    var text: String? {
+        var ref: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &ref) == .success,
+           let s = ref as? String { return s }
+        return nil
+    }
+
+    var selection: NSRange? {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &ref) == .success,
+              let val = ref,
+              CFGetTypeID(val) == AXValueGetTypeID() else { return nil }
+        let axVal = val as! AXValue
+        var cfr = CFRange(location: 0, length: 0)
+        if AXValueGetType(axVal) == .cfRange, AXValueGetValue(axVal, .cfRange, &cfr) {
+            return NSRange(location: cfr.location, length: cfr.length)
+        }
+        return nil
+    }
+
+    @discardableResult
+    func write(_ newText: String) -> Bool {
+        AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, newText as CFTypeRef) == .success
+    }
+
+    @discardableResult
+    func select(_ range: NSRange) -> Bool {
+        var cfr = CFRange(location: range.location, length: range.length)
+        guard let v = AXValueCreate(.cfRange, &cfr) else { return false }
+        return AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, v) == .success
     }
 }

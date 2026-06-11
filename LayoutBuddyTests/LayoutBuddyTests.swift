@@ -1,3 +1,4 @@
+import ApplicationServices
 import Carbon
 import CoreGraphics
 import XCTest
@@ -158,6 +159,74 @@ final class LayoutBuddyTests: XCTestCase {
         // Caret after the word shifts by the length delta.
         XCTAssertEqual(
             WordReplacementPlanner.adjustedCaret(10, afterReplacing: NSRange(location: 2, length: 3), withLength: 5), 12)
+    }
+
+    // MARK: - AX shell (replaceWord/correctLastWord on an in-memory TextTarget)
+
+    func testReplaceWordOnTargetBakesBoundaryAndMovesCaret() {
+        let app = makeApp()
+        let target = FakeTextTarget("ghbdsn", caret: 6)
+        let ok = app.replaceWord(on: target, original: "ghbdsn", converted: "привіт",
+                                 boundaryToInsert: " ", restoreLangPrefix: "en")
+        XCTAssertTrue(ok)
+        XCTAssertEqual(target.text, "привіт ")
+        XCTAssertEqual(target.selection, NSRange(location: 7, length: 0))
+        XCTAssertEqual(target.writeCount, 1)
+    }
+
+    func testReplaceWordOnTargetWithPrecedingText() {
+        let app = makeApp()
+        let target = FakeTextTarget("hello ghbdsn", caret: 12)
+        XCTAssertTrue(app.replaceWord(on: target, original: "ghbdsn", converted: "привіт",
+                                      boundaryToInsert: nil, restoreLangPrefix: "en"))
+        XCTAssertEqual(target.text, "hello привіт")
+        XCTAssertEqual(target.selection, NSRange(location: 12, length: 0))
+    }
+
+    func testReplaceWordOnTargetReturnsFalseAndLeavesStateWhenWriteFails() {
+        let app = makeApp()
+        let target = FakeTextTarget("ghbdsn", caret: 6)
+        target.failWrite = true
+        XCTAssertFalse(app.replaceWord(on: target, original: "ghbdsn", converted: "привіт",
+                                       boundaryToInsert: " ", restoreLangPrefix: "en"))
+        XCTAssertEqual(target.text, "ghbdsn")                              // unchanged
+        XCTAssertEqual(target.selection, NSRange(location: 6, length: 0))  // caret untouched
+    }
+
+    func testReplaceWordOnTargetRefusesActiveSelection() {
+        let app = makeApp()
+        let target = FakeTextTarget("ghbdsn", selection: NSRange(location: 0, length: 6))
+        XCTAssertFalse(app.replaceWord(on: target, original: "ghbdsn", converted: "привіт",
+                                       boundaryToInsert: nil, restoreLangPrefix: "en"))
+        XCTAssertEqual(target.text, "ghbdsn")
+        XCTAssertEqual(target.writeCount, 0)
+    }
+
+    func testReplaceWordOnTargetRefusesWhenWordNotFound() {
+        let app = makeApp()
+        let target = FakeTextTarget("hello", caret: 5)
+        XCTAssertFalse(app.replaceWord(on: target, original: "ghbdsn", converted: "привіт",
+                                       boundaryToInsert: nil, restoreLangPrefix: "en"))
+        XCTAssertEqual(target.writeCount, 0)
+    }
+
+    func testCorrectLastWordOnTargetConvertsTrailingWord() {
+        let app = makeApp()
+        let target = FakeTextTarget("hello ghbdsn ", caret: 13)
+        let ok = app.correctLastWord(on: target,
+                                     convert: { app.convert($0, from: "en", to: "uk") },
+                                     restoreLangPrefix: "en")
+        XCTAssertTrue(ok)
+        XCTAssertEqual(target.text, "hello привіт ")
+        XCTAssertEqual(target.selection, NSRange(location: 13, length: 0))
+    }
+
+    func testCorrectLastWordOnTargetNoOpReturnsFalse() {
+        let app = makeApp()
+        let target = FakeTextTarget("hello", caret: 5)
+        XCTAssertFalse(app.correctLastWord(on: target, convert: { $0 }, restoreLangPrefix: "en"))
+        XCTAssertEqual(target.text, "hello")
+        XCTAssertEqual(target.writeCount, 0)
     }
 
     func testDeleteClearsBufferWithoutConversion() throws {
@@ -401,5 +470,43 @@ final class LayoutBuddyTests: XCTestCase {
         event.keyboardGetUnicodeString(maxStringLength: 1, actualStringLength: &length, unicodeString: &value)
         XCTAssertEqual(length, 1)
         return value
+    }
+}
+
+/// In-memory `TextTarget` standing in for a focused AX element, so the AX-write
+/// orchestration (`replaceWord`/`correctLastWord`) can be exercised
+/// deterministically without a live control.
+final class FakeTextTarget: TextTarget {
+    private var content: NSString
+    private var caret: NSRange
+    var failWrite = false
+    private(set) var writeCount = 0
+    private(set) var selectCount = 0
+
+    init(_ text: String, caret: Int) {
+        self.content = text as NSString
+        self.caret = NSRange(location: caret, length: 0)
+    }
+
+    init(_ text: String, selection: NSRange) {
+        self.content = text as NSString
+        self.caret = selection
+    }
+
+    var axElement: AXUIElement? { nil }   // non-AX target → no precise undo recorded
+    var text: String? { content as String }
+    var selection: NSRange? { caret }
+
+    func write(_ newText: String) -> Bool {
+        guard !failWrite else { return false }
+        content = newText as NSString
+        writeCount += 1
+        return true
+    }
+
+    func select(_ range: NSRange) -> Bool {
+        caret = range
+        selectCount += 1
+        return true
     }
 }
