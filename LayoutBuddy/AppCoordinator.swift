@@ -717,12 +717,11 @@ final class AppCoordinator: NSObject {
         let curLangPrefix: String = isLayoutUkrainian(curID) ? "uk" : "en"
         let targetLangPrefix: String = (curLangPrefix == "en") ? "uk" : "en"
 
-        // If we are in the middle of typing a word, prefer using the in-memory buffer
-        // to avoid relying on Accessibility APIs.
+        // If we are in the middle of typing a word, we know the exact text from
+        // the in-memory buffer.
         if !wordParser.buffer.isEmpty {
             let core = wordParser.buffer
             let converted = convert(core, from: curLangPrefix, to: targetLangPrefix)
-            // Use navigation-based replacement to avoid timing issues with backspaces.
             let cand = AmbiguousCandidate(
                 element: nil,
                 pid: NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0,
@@ -737,6 +736,23 @@ final class AppCoordinator: NSObject {
                 wordsAhead: 0
             )
             wordParser.clear()
+
+            #if DEBUG
+            if isRunningUnitTests || testSimulationMode {
+                fallbackNavigateAndReplace(cand)   // simulates on the test document
+                return
+            }
+            #endif
+
+            // Prefer a precise AX edit; fall back to keystroke navigation.
+            if axReplaceWordBeforeCaret(original: core, with: converted,
+                                        restoreLangPrefix: curLangPrefix,
+                                        boundaryToInsert: nil) {
+                let switchTo = layoutID(forLanguagePrefix: targetLangPrefix) ?? otherLayoutID()
+                ensureSwitch(to: switchTo) { self.menuBar.updateStatusTitleAndColor() }
+                playSwitchSound()
+                return
+            }
             fallbackNavigateAndReplace(cand)
             return
         }
@@ -754,6 +770,14 @@ final class AppCoordinator: NSObject {
             return
         }
         #endif
+
+        // Prefer a precise Accessibility edit of the last word in the document.
+        if axCorrectLastWordInDocument(curLangPrefix: curLangPrefix, targetLangPrefix: targetLangPrefix) {
+            let switchTo = layoutID(forLanguagePrefix: targetLangPrefix) ?? otherLayoutID()
+            ensureSwitch(to: switchTo) { self.menuBar.updateStatusTitleAndColor() }
+            playSwitchSound()
+            return
+        }
 
         // Fallback path without relying on Accessibility:
         // select the last word via Option navigation, copy it, convert, then replace selection.
@@ -813,18 +837,33 @@ final class AppCoordinator: NSObject {
         #endif
 
         DispatchQueue.main.async {
-            let curID = self.layoutManager.currentInputSourceID()
-            let targetID = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
-            self.dlog("[REPLACE] start synth=\(self.isSynthesizing) curID=\(curID) targetID=\(targetID) buffer=\(self.wordParser.buffer)")
-            self.isSynthesizing = true
+            self.dlog("[REPLACE] start synth=\(self.isSynthesizing) curID=\(self.layoutManager.currentInputSourceID()) buffer=\(self.wordParser.buffer)")
 
+            // Prefer a precise Accessibility edit. A normal boundary (space,
+            // punctuation) was swallowed from the event stream, so bake it back
+            // in; a special boundary (return/tab) was let through and is handled
+            // by the app itself, so there is nothing to reinsert.
+            let boundaryToInsert: UnicodeScalar? = keepFollowingBoundary ? nil : boundaryEvent?.firstUnicodeScalar
+            if self.axReplaceWordBeforeCaret(original: oldWord, with: newWord,
+                                             restoreLangPrefix: restoreLangPrefix,
+                                             boundaryToInsert: boundaryToInsert) {
+                // The text edit needed no layout switch; switch only so the user
+                // continues typing in the target layout (UX).
+                let switchTo = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
+                self.ensureSwitch(to: switchTo) { self.menuBar.updateStatusTitleAndColor() }
+                return
+            }
+
+            // Fallback: synthetic-keystroke choreography for fields without AX.
+            self.dlog("[REPLACE] AX unavailable; using keystroke fallback")
+            self.isSynthesizing = true
             // Delay to let the system commit the most recent keystroke
             DispatchQueue.main.asyncAfter(deadline: .now() + Timing.commitDelay) {
                 if keepFollowingBoundary { self.tapKey(.leftArrow) } // keep trailing boundary (space, etc.)
                 self.sendBackspace(times: deleteCount)
 
-                let targetID = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
-                self.ensureSwitch(to: targetID) {
+                let switchTo = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
+                self.ensureSwitch(to: switchTo) {
                     self.typeUnicode(newWord)
                     self.postSynthetic(boundaryEvent)
                     self.rememberBlindUndo(original: oldWord, corrected: newWord, restoreLangPrefix: restoreLangPrefix, wordsAhead: initialUndoWordsAhead)
@@ -1112,6 +1151,127 @@ final class AppCoordinator: NSObject {
         } else {
             return caret
         }
+    }
+
+    /// Surrounding text (±`contextRadius`) used to re-anchor a range during undo.
+    private func axContext(around range: NSRange, in ns: NSString) -> (before: String, after: String) {
+        let beforeStart = max(0, range.location - contextRadius)
+        let before = ns.substring(with: NSRange(location: beforeStart, length: range.location - beforeStart))
+        let afterStart = range.location + range.length
+        let afterLen = min(contextRadius, max(0, ns.length - afterStart))
+        let after = ns.substring(with: NSRange(location: afterStart, length: afterLen))
+        return (before, after)
+    }
+
+    /// Replaces a word sitting immediately before the caret in the focused
+    /// element using the Accessibility API — no synthetic keystrokes and no
+    /// layout-switch timing. Because `axSetSelectedRange` moves the *real*
+    /// caret, a boundary character that was swallowed from the event stream can
+    /// be baked straight into the edit.
+    ///
+    /// Returns false (changing nothing observable) when AX is unavailable or the
+    /// word can't be confidently located, so the caller can fall back to
+    /// synthetic keystrokes.
+    ///
+    /// - Parameter boundaryToInsert: a boundary (space/punctuation) that was
+    ///   swallowed and must be reinserted after the corrected word. Pass nil
+    ///   when the boundary is still in the document or when correcting mid-word.
+    @discardableResult
+    private func axReplaceWordBeforeCaret(original: String,
+                                          with converted: String,
+                                          restoreLangPrefix: String,
+                                          boundaryToInsert: UnicodeScalar?) -> Bool {
+        guard !original.isEmpty,
+              let el = axFocusedElement(),
+              let caret = axSelectedRange(el), caret.length == 0,
+              let full = axStringValue(el) else { return false }
+
+        let ns = full as NSString
+        let origLen = (original as NSString).length
+        guard caret.location >= origLen, caret.location <= ns.length else { return false }
+
+        // Most recent occurrence of `original` ending at — or within a short
+        // boundary gap of — the caret.
+        let found = ns.range(of: original, options: .backwards,
+                             range: NSRange(location: 0, length: caret.location))
+        guard found.location != NSNotFound else { return false }
+        let gap = caret.location - (found.location + found.length)
+        guard gap >= 0, gap <= 2 else { return false }
+        if gap > 0 {
+            // Anything between the word and the caret must be a boundary, never
+            // letters we'd silently corrupt.
+            let between = ns.substring(with: NSRange(location: found.location + found.length, length: gap))
+            guard between.unicodeScalars.allSatisfy({ !lbLetters.contains($0) }) else { return false }
+        }
+
+        var replacement = converted
+        if let boundary = boundaryToInsert { replacement.unicodeScalars.append(boundary) }
+        let replacementLen = (replacement as NSString).length
+        let convertedLen = (converted as NSString).length
+        let newText = ns.replacingCharacters(in: found, with: replacement)
+
+        isSynthesizing = true
+        let ok = axSetStringValue(el, newText)
+        guard ok else { isSynthesizing = false; return false }
+        let newCaret = adjustedCaret(caret.location, afterReplacing: found, withLength: replacementLen)
+        _ = axSetSelectedRange(el, NSRange(location: max(0, newCaret), length: 0))
+        isSynthesizing = false
+
+        // Precise undo targets the corrected word only (not any baked boundary).
+        // Anchor context against the resulting text so relocation stays accurate.
+        let correctedRange = NSRange(location: found.location, length: convertedLen)
+        let (before, after) = axContext(around: correctedRange, in: newText as NSString)
+        rememberAXUndo(element: el, range: correctedRange,
+                       original: original, corrected: converted,
+                       before: before, after: after,
+                       restoreLangPrefix: restoreLangPrefix)
+        return true
+    }
+
+    /// Finds the last word (run of letters / word-internal characters) at or
+    /// before the caret in the focused element and converts it in place via AX.
+    /// Used by the force-correct hotkey when there is no in-memory buffer.
+    /// Returns false if AX is unavailable or no convertible word is found.
+    private func axCorrectLastWordInDocument(curLangPrefix: String, targetLangPrefix: String) -> Bool {
+        guard let el = axFocusedElement(),
+              let caret = axSelectedRange(el), caret.length == 0,
+              let full = axStringValue(el) else { return false }
+
+        let ns = full as NSString
+        guard caret.location > 0, caret.location <= ns.length else { return false }
+
+        func isWordChar(at index: Int) -> Bool {
+            let s = ns.substring(with: NSRange(location: index, length: 1))
+            return s.unicodeScalars.allSatisfy { lbLetters.contains($0) || wordParser.isWordInternal($0) }
+        }
+
+        var end = caret.location
+        while end > 0, !isWordChar(at: end - 1) { end -= 1 }   // skip trailing boundaries
+        guard end > 0 else { return false }
+        var start = end
+        while start > 0, isWordChar(at: start - 1) { start -= 1 }
+        guard start < end else { return false }
+
+        let wordRange = NSRange(location: start, length: end - start)
+        let original = ns.substring(with: wordRange)
+        let converted = convert(original, from: curLangPrefix, to: targetLangPrefix)
+        guard converted != original else { return false }
+
+        let newText = ns.replacingCharacters(in: wordRange, with: converted)
+        isSynthesizing = true
+        let ok = axSetStringValue(el, newText)
+        guard ok else { isSynthesizing = false; return false }
+        let newCaret = adjustedCaret(caret.location, afterReplacing: wordRange, withLength: (converted as NSString).length)
+        _ = axSetSelectedRange(el, NSRange(location: max(0, newCaret), length: 0))
+        isSynthesizing = false
+
+        let correctedRange = NSRange(location: wordRange.location, length: (converted as NSString).length)
+        let (before, after) = axContext(around: correctedRange, in: newText as NSString)
+        rememberAXUndo(element: el, range: correctedRange,
+                       original: original, corrected: converted,
+                       before: before, after: after,
+                       restoreLangPrefix: curLangPrefix)
+        return true
     }
 
     // If AX fails at capture time, push a "blind" candidate so hotkey can still fix it.
