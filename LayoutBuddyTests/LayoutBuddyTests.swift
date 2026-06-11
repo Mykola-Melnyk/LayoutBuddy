@@ -221,6 +221,19 @@ final class LayoutBuddyTests: XCTestCase {
         XCTAssertEqual(target.selection, NSRange(location: 13, length: 0))
     }
 
+    func testReplaceWordFallsBackWhenAXReportsSuccessButTextUnchanged() {
+        let app = makeApp()
+        let target = FakeTextTarget("ghbdsn", caret: 6)
+        target.lieOnReplace = true   // AX shim claims success but doesn't apply
+
+        XCTAssertFalse(app.replaceWord(on: target, original: "ghbdsn", converted: "привіт",
+                                       boundaryToInsert: " ", restoreLangPrefix: "en"))
+        XCTAssertEqual(target.text, "ghbdsn")                              // genuinely unchanged
+        // Caret collapsed to the end of the original word so the keystroke
+        // fallback deletes the right characters.
+        XCTAssertEqual(target.selection, NSRange(location: 6, length: 0))
+    }
+
     func testCorrectLastWordOnTargetNoOpReturnsFalse() {
         let app = makeApp()
         let target = FakeTextTarget("hello", caret: 5)
@@ -536,6 +549,7 @@ final class FakeTextTarget: TextTarget {
     private var content: NSString
     private var caret: NSRange
     var failWrite = false
+    var lieOnReplace = false   // mimic an AX shim that reports success but doesn't apply the edit
     private(set) var writeCount = 0
     private(set) var selectCount = 0
 
@@ -562,6 +576,7 @@ final class FakeTextTarget: TextTarget {
 
     func replace(_ range: NSRange, with text: String) -> Bool {
         guard !failWrite else { return false }
+        if lieOnReplace { return true }   // success reported, but nothing changes
         let mutable = content.mutableCopy() as! NSMutableString
         mutable.replaceCharacters(in: range, with: text)
         content = mutable

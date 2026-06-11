@@ -1203,13 +1203,22 @@ final class AppCoordinator: NSObject {
         guard let plan else { return false }
         isSynthesizing = true
         // Replace just the word's range (not the whole field) so the app doesn't
-        // yank the caret to the start, then place the caret after the new word.
-        let ok = target.replace(plan.replacedRange, with: plan.replacement)
-        if ok {
-            _ = target.select(NSRange(location: plan.newCaret, length: 0))
+        // yank the caret to the start.
+        let wrote = target.replace(plan.replacedRange, with: plan.replacement)
+        // Some fields (web / Electron AX shims) accept the AX calls — selecting
+        // the word — but never apply the text change, yet still report success.
+        // Confirm the value actually changed before trusting it.
+        let confirmed = wrote && target.text == plan.newText
+        guard confirmed else {
+            // The word may be left selected; collapse to a caret at the end of
+            // the original word so the caller's keystroke fallback deletes the
+            // right characters. Then report failure.
+            _ = target.select(NSRange(location: plan.replacedRange.location + plan.replacedRange.length, length: 0))
+            isSynthesizing = false
+            return false
         }
+        _ = target.select(NSRange(location: plan.newCaret, length: 0))
         isSynthesizing = false
-        guard ok else { return false }
 
         if let el = target.axElement {
             rememberAXUndo(element: el, range: plan.correctedRange,
@@ -1414,15 +1423,19 @@ final class AppCoordinator: NSObject {
             // yank the caret to the start of the field).
             if axSetSelectedRange(el, finalRange) {
                 let convertedLen = (cand.converted as NSString).length
-                isSynthesizing = true
-                let ok = AXTextTarget(element: el).replace(finalRange, with: cand.converted)
                 let newCaret = adjustedCaret(caretBefore.location, afterReplacing: finalRange, withLength: convertedLen)
-                _ = axSetSelectedRange(el, NSRange(location: max(0, newCaret), length: 0))
+                isSynthesizing = true
+                let wrote = AXTextTarget(element: el).replace(finalRange, with: cand.converted)
+                // Confirm the field actually changed; some AX shims report
+                // success but leave the word merely selected.
+                let confirmed = wrote &&
+                    axStringForRange(el, CFRange(location: finalRange.location, length: convertedLen)) == cand.converted
+                if confirmed {
+                    _ = axSetSelectedRange(el, NSRange(location: max(0, newCaret), length: 0))
+                }
                 isSynthesizing = false
 
-                if !ok {
-                    fallbackTypeOverSelection(el: el, text: cand.converted, restoreCaretTo: newCaret)
-                } else {
+                if confirmed {
                     let correctedRange = NSRange(location: finalRange.location, length: convertedLen)
                     rememberAXUndo(
                         element: el,
@@ -1434,6 +1447,10 @@ final class AppCoordinator: NSObject {
                         restoreLangPrefix: oppositeLanguagePrefix(cand.targetLangPrefix)
                     )
                     playSwitchSound(); menuBar.updateStatusTitleAndColor()
+                } else {
+                    // The word is still selected — type over it (works where AX
+                    // text mutation doesn't).
+                    fallbackTypeOverSelection(el: el, text: cand.converted, restoreCaretTo: newCaret)
                 }
                 return
             }
@@ -1461,14 +1478,19 @@ final class AppCoordinator: NSObject {
         guard axSetSelectedRange(el, finalRange) else { return false }
         // Replace just the selected word rather than rewriting the whole value,
         // which would yank the caret to the start of the field.
-        isSynthesizing = true
-        let ok = AXTextTarget(element: el).replace(finalRange, with: undo.original)
         let originalLen = (undo.original as NSString).length
-        let newCaret = adjustedCaret(caretBefore.location, afterReplacing: finalRange, withLength: originalLen)
-        _ = axSetSelectedRange(el, NSRange(location: max(0, newCaret), length: 0))
+        isSynthesizing = true
+        let wrote = AXTextTarget(element: el).replace(finalRange, with: undo.original)
+        // Confirm it took; some AX shims report success without applying the edit.
+        let confirmed = wrote &&
+            axStringForRange(el, CFRange(location: finalRange.location, length: originalLen)) == undo.original
+        if confirmed {
+            let newCaret = adjustedCaret(caretBefore.location, afterReplacing: finalRange, withLength: originalLen)
+            _ = axSetSelectedRange(el, NSRange(location: max(0, newCaret), length: 0))
+        }
         isSynthesizing = false
 
-        guard ok else { return false }
+        guard confirmed else { return false }   // → keystroke fallback (fallbackNavigateAndUndo)
         restoreLayoutAfterUndo(undo.restoreLangPrefix)
         return true
     }
