@@ -12,6 +12,7 @@ final class MenuBarController: NSObject {
     var onQuit: (() -> Void)?
     var onToggleConversion: (() -> Void)?
     var onOpenSettings: (() -> Void)?
+    var onOpenPermissions: (() -> Void)?
     var onForceCorrectLastWord: (() -> Void)?
     var onCorrectLastAmbiguousWord: (() -> Void)?
     var onUndoLastCorrection: (() -> Void)?
@@ -123,6 +124,12 @@ final class MenuBarController: NSObject {
             applyKeyEquivalent(undoItem, from: preferences.undoCorrectionHotkey)
             menu.addItem(undoItem)
 
+            menu.addItem(.separator())
+
+            let permissionsItem = NSMenuItem(title: "Permissions…", action: #selector(openPermissions), keyEquivalent: "")
+            permissionsItem.target = self
+            menu.addItem(permissionsItem)
+
             let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
             settingsItem.keyEquivalentModifierMask = [.command]
             settingsItem.target = self
@@ -180,6 +187,10 @@ final class MenuBarController: NSObject {
 
     @objc private func openSettings() {
         onOpenSettings?()
+    }
+
+    @objc private func openPermissions() {
+        onOpenPermissions?()
     }
 
     @objc private func forceCorrectLastWord() {
