@@ -685,6 +685,114 @@ final class HotkeyTests: XCTestCase {
     }
 }
 
+// MARK: - KeyboardLayoutManager (caching + selection, on a fake provider)
+
+/// In-memory `InputSourceProviding` so the manager's cache/switching can be
+/// tested without the live TIS APIs.
+final class FakeInputSourceProvider: InputSourceProviding {
+    var layouts: [KeyboardLayoutManager.InputSourceInfo]
+    var current: String
+    private(set) var fetchCount = 0
+    private(set) var selectedIDs: [String] = []
+
+    init(layouts: [KeyboardLayoutManager.InputSourceInfo], current: String = "") {
+        self.layouts = layouts
+        self.current = current
+    }
+
+    func selectableLayouts() -> [KeyboardLayoutManager.InputSourceInfo] {
+        fetchCount += 1
+        return layouts
+    }
+    func currentInputSourceID() -> String { current }
+    func selectInputSource(id: String) {
+        selectedIDs.append(id)
+        current = id
+    }
+}
+
+final class KeyboardLayoutManagerTests: XCTestCase {
+    private func info(_ id: String, _ name: String, _ langs: [String]) -> KeyboardLayoutManager.InputSourceInfo {
+        KeyboardLayoutManager.InputSourceInfo(id: id, name: name, languages: langs)
+    }
+
+    private func prefs() throws -> LayoutPreferences {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString))
+        return LayoutPreferences(defaults: defaults)
+    }
+
+    func testLayoutListIsCachedUntilInvalidated() throws {
+        let provider = FakeInputSourceProvider(layouts: [info("US", "U.S.", ["en"])])
+        let m = KeyboardLayoutManager(preferences: try prefs(), provider: provider)
+
+        _ = m.listSelectableKeyboardLayouts()
+        _ = m.listSelectableKeyboardLayouts()
+        XCTAssertEqual(provider.fetchCount, 1)                       // second call served from cache
+
+        provider.layouts = [info("US", "U.S.", ["en"]), info("UA", "Ukrainian", ["uk"])]
+        XCTAssertEqual(m.listSelectableKeyboardLayouts().count, 1)   // still cached
+
+        m.invalidateCaches()
+        XCTAssertEqual(m.listSelectableKeyboardLayouts().count, 2)   // refetched after invalidation
+        XCTAssertEqual(provider.fetchCount, 2)
+    }
+
+    func testInputSourceInfoAndIsLanguageShareOneFetch() throws {
+        let provider = FakeInputSourceProvider(layouts: [info("US", "U.S.", ["en"]),
+                                                         info("UA", "Ukrainian", ["uk"])])
+        let m = KeyboardLayoutManager(preferences: try prefs(), provider: provider)
+
+        XCTAssertEqual(m.inputSourceInfo(for: "UA")?.name, "Ukrainian")
+        XCTAssertNil(m.inputSourceInfo(for: "missing"))
+        XCTAssertTrue(m.isLanguage(id: "UA", hasPrefix: "uk"))
+        XCTAssertFalse(m.isLanguage(id: "UA", hasPrefix: "en"))
+        XCTAssertFalse(m.isLanguage(id: "missing", hasPrefix: "uk"))
+        XCTAssertEqual(provider.fetchCount, 1)                       // all reads share one fetch
+    }
+
+    func testToggleLayoutAlternatesBetweenPrimaryAndSecondary() throws {
+        let preferences = try prefs()
+        preferences.primaryID = "US"
+        preferences.secondaryID = "UA"
+        let provider = FakeInputSourceProvider(
+            layouts: [info("US", "U.S.", ["en"]), info("UA", "Ukrainian", ["uk"])],
+            current: "US")
+        let m = KeyboardLayoutManager(preferences: preferences, provider: provider)
+
+        m.toggleLayout()
+        XCTAssertEqual(provider.selectedIDs.last, "UA")             // primary → secondary
+        m.toggleLayout()
+        XCTAssertEqual(provider.selectedIDs.last, "US")             // secondary → primary
+    }
+
+    // MARK: selectPrimary / selectSecondary (pure)
+
+    func testSelectPrimaryPrefersCurrentThenUSThenABC() {
+        let us = info("com.apple.keylayout.US", "U.S.", ["en"])
+        let abc = info("com.apple.keylayout.ABC", "ABC", ["en"])
+        let ua = info("com.apple.keylayout.Ukrainian-PC", "Ukrainian-PC", ["uk"])
+
+        XCTAssertEqual(KeyboardLayoutManager.selectPrimary(current: "anything", available: [us]), "anything")
+        XCTAssertEqual(KeyboardLayoutManager.selectPrimary(current: "", available: [abc, us, ua]), us.id)
+        XCTAssertEqual(KeyboardLayoutManager.selectPrimary(current: "", available: [abc, ua]), abc.id)
+        XCTAssertEqual(KeyboardLayoutManager.selectPrimary(current: "", available: [ua]), ua.id)
+        XCTAssertEqual(KeyboardLayoutManager.selectPrimary(current: "", available: []), "com.apple.keylayout.US")
+    }
+
+    func testSelectSecondaryPicksOppositeLanguage() {
+        let us = info("US", "U.S.", ["en"])
+        let ua = info("UA", "Ukrainian", ["uk"])
+        let fr = info("FR", "French", ["fr"])
+
+        XCTAssertEqual(KeyboardLayoutManager.selectSecondary(primary: "US", available: [us, ua]), "UA")
+        XCTAssertEqual(KeyboardLayoutManager.selectSecondary(primary: "UA", available: [ua, us]), "US")
+        // No opposite-language layout → fall back to any other available one.
+        XCTAssertEqual(KeyboardLayoutManager.selectSecondary(primary: "US", available: [us, fr]), "FR")
+        // Nothing else available → returns the primary itself.
+        XCTAssertEqual(KeyboardLayoutManager.selectSecondary(primary: "US", available: [us]), "US")
+    }
+}
+
 // MARK: - LayoutPreferences
 
 final class LayoutPreferencesTests: XCTestCase {
