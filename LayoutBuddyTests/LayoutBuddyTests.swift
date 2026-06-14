@@ -221,12 +221,66 @@ final class LayoutBuddyTests: XCTestCase {
         XCTAssertEqual(target.selection, NSRange(location: 13, length: 0))
     }
 
+    func testReplaceWordFallsBackWhenAXReportsSuccessButTextUnchanged() {
+        let app = makeApp()
+        let target = FakeTextTarget("ghbdsn", caret: 6)
+        target.lieOnReplace = true   // AX shim claims success but doesn't apply
+
+        XCTAssertFalse(app.replaceWord(on: target, original: "ghbdsn", converted: "привіт",
+                                       boundaryToInsert: " ", restoreLangPrefix: "en"))
+        XCTAssertEqual(target.text, "ghbdsn")                              // genuinely unchanged
+        // Caret collapsed to the end of the original word so the keystroke
+        // fallback deletes the right characters.
+        XCTAssertEqual(target.selection, NSRange(location: 6, length: 0))
+    }
+
     func testCorrectLastWordOnTargetNoOpReturnsFalse() {
         let app = makeApp()
         let target = FakeTextTarget("hello", caret: 5)
         XCTAssertFalse(app.correctLastWord(on: target, convert: { $0 }, restoreLangPrefix: "en"))
         XCTAssertEqual(target.text, "hello")
         XCTAssertEqual(target.writeCount, 0)
+    }
+
+    // Bug: undoing a correction whose corrected form starts with punctuation
+    // (e.g. uk "баг" → ",fu") left ",fuбаг" because the undo located the word
+    // by letter-run and missed the leading comma.
+    func testUndoRestoresPunctuationLeadingCorrection() {
+        let app = makeApp()
+        app.testDocumentText = ",fu"   // "баг" was force-corrected to ",fu"
+        app.testRememberBlindUndo(original: "баг", corrected: ",fu", restoreLangPrefix: "uk")
+
+        app.testUndoLastCorrectionSynchronously()
+
+        XCTAssertEqual(app.testCapturedText(), "баг")   // not ",fuбаг" / ",fu"
+    }
+
+    // Bug: after Undo Last Correction the next word stopped auto-correcting.
+    // Conversion logic must keep working after an undo.
+    func testConversionStillWorksAfterUndo() throws {
+        let app = makeApp()
+
+        try type("csv", into: app)
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: " "))
+        XCTAssertEqual(app.testCapturedText(), "сім ")
+
+        app.testUndoLastCorrectionSynchronously()
+        XCTAssertEqual(app.testCapturedText(), "csv ")
+
+        // The next mistyped word must still convert.
+        try type("afqke", into: app)
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: " "))
+        XCTAssertTrue(app.testCapturedText().contains("файлу"),
+                      "expected conversion to resume, got: \(app.testCapturedText())")
+    }
+
+    // The source language is decided by the typed script (buffer), not the live
+    // keyboard layout (which drifts). A correctly-typed Cyrillic word is kept.
+    func testCorrectlyTypedCyrillicWordIsKept() throws {
+        let app = makeApp()
+        try type("файлу", into: app)
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: " "))
+        XCTAssertEqual(app.testCapturedText(), "")   // valid uk word → nothing replaced
     }
 
     func testDeleteClearsBufferWithoutConversion() throws {
@@ -536,6 +590,7 @@ final class FakeTextTarget: TextTarget {
     private var content: NSString
     private var caret: NSRange
     var failWrite = false
+    var lieOnReplace = false   // mimic an AX shim that reports success but doesn't apply the edit
     private(set) var writeCount = 0
     private(set) var selectCount = 0
 
@@ -556,6 +611,16 @@ final class FakeTextTarget: TextTarget {
     func write(_ newText: String) -> Bool {
         guard !failWrite else { return false }
         content = newText as NSString
+        writeCount += 1
+        return true
+    }
+
+    func replace(_ range: NSRange, with text: String) -> Bool {
+        guard !failWrite else { return false }
+        if lieOnReplace { return true }   // success reported, but nothing changes
+        let mutable = content.mutableCopy() as! NSMutableString
+        mutable.replaceCharacters(in: range, with: text)
+        content = mutable
         writeCount += 1
         return true
     }

@@ -11,6 +11,10 @@ protocol TextTarget: AnyObject {
     var selection: NSRange? { get }
     /// Replaces the whole value. Returns false if the control rejected the write.
     @discardableResult func write(_ newText: String) -> Bool
+    /// Replaces just `range` with `text` (select-then-set-selected-text). This is
+    /// preferred over `write` for edits: rewriting the whole value makes many
+    /// apps reset the caret to the start of the field.
+    @discardableResult func replace(_ range: NSRange, with text: String) -> Bool
     /// Moves the caret / selection. Returns false on failure.
     @discardableResult func select(_ range: NSRange) -> Bool
     /// The backing AX element when one exists (enables precise undo); nil for
@@ -49,6 +53,14 @@ final class AXTextTarget: TextTarget {
     @discardableResult
     func write(_ newText: String) -> Bool {
         AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, newText as CFTypeRef) == .success
+    }
+
+    @discardableResult
+    func replace(_ range: NSRange, with text: String) -> Bool {
+        // Select the range, then replace just the selection. Setting the whole
+        // value (kAXValue) instead makes many apps yank the caret to offset 0.
+        guard select(range) else { return false }
+        return AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFTypeRef) == .success
     }
 
     @discardableResult

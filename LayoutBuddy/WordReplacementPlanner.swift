@@ -6,15 +6,18 @@ import Foundation
 /// plain strings instead of a live `AXUIElement`.
 enum WordReplacementPlanner {
 
-    /// A fully-computed edit: the resulting text, where the caret should land,
-    /// the range now occupied by the corrected word, and the surrounding
-    /// context (used to re-anchor an undo).
+    /// A fully-computed edit. `replacedRange` + `replacement` drive an in-place
+    /// range replacement (select the word, swap just it) — far gentler on the
+    /// caret than rewriting the whole field value. `newText`/`newCaret` describe
+    /// the resulting state; `correctedRange` + context re-anchor an undo.
     struct Plan: Equatable {
         let original: String
         let converted: String
+        let replacedRange: NSRange   // the original word's range in the pre-edit text
+        let replacement: String      // converted text (+ any baked boundary)
         let newText: String
         let newCaret: Int
-        let correctedRange: NSRange
+        let correctedRange: NSRange   // the converted word's range in the post-edit text
         let before: String
         let after: String
     }
@@ -102,6 +105,7 @@ enum WordReplacementPlanner {
         let correctedRange = NSRange(location: wordRange.location, length: convertedLen)
         let (before, after) = context(around: correctedRange, in: newText, radius: contextRadius)
         return Plan(original: original, converted: converted,
+                    replacedRange: wordRange, replacement: replacement,
                     newText: newText as String, newCaret: newCaret,
                     correctedRange: correctedRange, before: before, after: after)
     }

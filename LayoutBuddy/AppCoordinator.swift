@@ -2,6 +2,7 @@ import Cocoa
 import Carbon              // TIS* APIs + kVK_* keycodes
 import ApplicationServices // Accessibility (AX) APIs
 import SwiftUI
+import os                  // os_log — diagnostics that survive Release builds
 
 
 // MARK: - Helpers
@@ -38,14 +39,16 @@ final class AppCoordinator: NSObject {
     private let permissions = PermissionsManager()
     private var conversionOn = true
     
-    // Toggle diagnostics here
+    // Diagnostics. Flip to true to trace via os_log in any build:
+    //   log stream --predicate 'subsystem == "mmelnyk.LayoutBuddy"' --style compact
     private let enableDiagnostics = false
+    private let diagLogger = Logger(subsystem: "mmelnyk.LayoutBuddy", category: "diag")
 
     @inline(__always)
     private func dlog(_ msg: @autoclosure () -> String) {
-        #if DEBUG
-        if enableDiagnostics { Swift.print(msg()) }
-        #endif
+        guard enableDiagnostics else { return }
+        let line = msg()
+        diagLogger.log("\(line, privacy: .public)")
     }
 
 
@@ -463,6 +466,7 @@ final class AppCoordinator: NSObject {
         dlog("[KEY] decoded scalar=\(scalar) buffer=\(wordParser.buffer)")
 
         if !wordParser.buffer.isEmpty, isEditingInsideWordBeforeInput() {
+            dlog("[KEY] editing-inside-word reset; dropped buffer=\(wordParser.buffer) scalar=\(scalar)")
             resetTypingStateAfterCaretMove()
             return Unmanaged.passUnretained(event)
         }
@@ -598,17 +602,16 @@ final class AppCoordinator: NSObject {
         dlog("[PROC] entry buffer=\(wordParser.buffer)")
 
         let curID = layoutManager.currentInputSourceID()
-        let curLangPrefix: String
-        if (isRunningUnitTests || testSimulationMode) {
-            if let first = wordParser.buffer.unicodeScalars.first,
-               wordParser.isCyrillicLetter(first) {
-                curLangPrefix = "uk"
-            } else {
-                curLangPrefix = "en"
-            }
-        } else {
-            curLangPrefix = isLayoutUkrainian(curID) ? "uk" : "en"
+        // Decide the source language from what was actually TYPED (the buffer's
+        // script), NOT the live keyboard layout. The layout can drift between
+        // typing the word and hitting the boundary — and especially right after
+        // an undo — so `currentInputSourceID()` may report ABC/English while the
+        // buffer holds Cyrillic (or vice-versa), which misclassifies the word
+        // and silently skips conversion. The buffer is ground truth.
+        let firstLetter = wordParser.buffer.unicodeScalars.first {
+            wordParser.isLatinLetter($0) || wordParser.isCyrillicLetter($0)
         }
+        let curLangPrefix = (firstLetter.map { wordParser.isCyrillicLetter($0) } ?? false) ? "uk" : "en"
         let otherLangPrefix = (curLangPrefix == "en") ? "uk" : "en"
 
         let (core, _) = wordParser.splitTrailingMapped(wordParser.buffer)
@@ -647,9 +650,9 @@ final class AppCoordinator: NSObject {
 
         let curOK = !suspiciousEN && isSpelledCorrect(core, language: curSpell)
         let convertedCore = convert(core, from: curLangPrefix, to: otherLangPrefix)
-        dlog("[PROC] converted=\(convertedCore)")
         // If nothing mapped, the "other language" form is identical — skip it.
         let otherOK = convertedCore != core && !convertedCore.isEmpty && isSpelledCorrect(convertedCore, language: otherSpell)
+        dlog("[PROC] decision curID=\(curID) curLang=\(curLangPrefix) core=\(core) converted=\(convertedCore) curOK=\(curOK) otherOK=\(otherOK)")
 
         // Tie: both valid → save candidate, no auto-change
         if curOK && otherOK {
@@ -762,9 +765,11 @@ final class AppCoordinator: NSObject {
         }
         #endif
 
-        if undo.keystrokeOnly || !applyAXUndo(undo) {
-            fallbackNavigateAndUndo(undo)
-        }
+        // Prefer an exact-string AX replacement in the focused field (robust for
+        // punctuation and blind undos); then the stored-range AX path; then keys.
+        if axUndoByText(undo) { return }
+        if !undo.keystrokeOnly, applyAXUndo(undo) { return }
+        fallbackNavigateAndUndo(undo)
     }
 
     private func forceCorrectLastWord() {
@@ -1003,12 +1008,24 @@ final class AppCoordinator: NSObject {
     private func optLeft()       { tapKeyWithFlags(CGKeyCode(kVK_LeftArrow),  flags: .maskAlternate) }
     private func optRight()      { tapKeyWithFlags(CGKeyCode(kVK_RightArrow), flags: .maskAlternate) }
     private func shiftOptRight() { tapKeyWithFlags(CGKeyCode(kVK_RightArrow), flags: [.maskAlternate, .maskShift]) }
+    private func shiftLeft()     { tapKeyWithFlags(CGKeyCode(kVK_LeftArrow),  flags: .maskShift) }
 
     // Ensure layout really switched before typing
+    // Bumped on every ensureSwitch so a newer switch supersedes older retry
+    // loops. Without this, an in-flight correction's "switch to Ukrainian" loop
+    // keeps firing and overrides a subsequent undo's "switch to English",
+    // leaving the wrong layout active — after which the next word converts as a
+    // no-op and the app appears to "stop correcting".
+    private var switchGeneration = 0
+
     private func ensureSwitch(to targetID: String, attempts: Int = 12, done: @escaping () -> Void) {
+        switchGeneration += 1
+        let generation = switchGeneration
         func attempt(_ n: Int) {
+            guard generation == self.switchGeneration else { done(); return }  // superseded
             self.layoutManager.switchLayout(to: targetID)
             DispatchQueue.main.asyncAfter(deadline: .now() + Timing.layoutSettle) {
+                guard generation == self.switchGeneration else { done(); return }
                 if self.layoutManager.currentInputSourceID() == targetID || n >= attempts { done() }
                 else { attempt(n + 1) }
             }
@@ -1148,9 +1165,6 @@ final class AppCoordinator: NSObject {
         AXTextTarget(element: el).select(range)
     }
 
-    private func axSetStringValue(_ el: AXUIElement, _ newValue: String) -> Bool {
-        AXTextTarget(element: el).write(newValue)
-    }
 
     /// Re-locates a previously captured range inside the element's *current*
     /// text (it may have shifted as the user kept typing). Tries the stored
@@ -1205,14 +1219,23 @@ final class AppCoordinator: NSObject {
                        restoreLangPrefix: String) -> Bool {
         guard let plan else { return false }
         isSynthesizing = true
-        let ok = target.write(plan.newText)
-        if ok {
-            // Moving the *real* caret means any swallowed boundary baked into
-            // plan.newText ends up correctly placed.
-            _ = target.select(NSRange(location: plan.newCaret, length: 0))
+        // Replace just the word's range (not the whole field) so the app doesn't
+        // yank the caret to the start.
+        let wrote = target.replace(plan.replacedRange, with: plan.replacement)
+        // Some fields (web / Electron AX shims) accept the AX calls — selecting
+        // the word — but never apply the text change, yet still report success.
+        // Confirm the value actually changed before trusting it.
+        let confirmed = wrote && target.text == plan.newText
+        guard confirmed else {
+            // The word may be left selected; collapse to a caret at the end of
+            // the original word so the caller's keystroke fallback deletes the
+            // right characters. Then report failure.
+            _ = target.select(NSRange(location: plan.replacedRange.location + plan.replacedRange.length, length: 0))
+            isSynthesizing = false
+            return false
         }
+        _ = target.select(NSRange(location: plan.newCaret, length: 0))
         isSynthesizing = false
-        guard ok else { return false }
 
         if let el = target.axElement {
             rememberAXUndo(element: el, range: plan.correctedRange,
@@ -1403,7 +1426,7 @@ final class AppCoordinator: NSObject {
         // Try AX path
         if let el = cand.element, axPID(el) == cand.pid,
            let caretBefore = axSelectedRange(el),
-           var full = axStringValue(el) {
+           let full = axStringValue(el) {
 
             let ns = full as NSString
             guard let cr = cand.range else { fallbackNavigateAndReplace(cand); return }
@@ -1413,23 +1436,23 @@ final class AppCoordinator: NSObject {
                 fallbackNavigateAndReplace(cand); return
             }
 
-            // Replace via setValue on whole string (works in many fields)
+            // Replace just the selected word (setting the whole value would
+            // yank the caret to the start of the field).
             if axSetSelectedRange(el, finalRange) {
-                full = axStringValue(el) ?? full
-                let ns2 = full as NSString
-                let newText = ns2.replacingCharacters(in: finalRange, with: cand.converted)
-
-                isSynthesizing = true
-                let ok = axSetStringValue(el, newText)
-                // Restore caret:
                 let convertedLen = (cand.converted as NSString).length
                 let newCaret = adjustedCaret(caretBefore.location, afterReplacing: finalRange, withLength: convertedLen)
-                _ = axSetSelectedRange(el, NSRange(location: max(0, newCaret), length: 0))
+                isSynthesizing = true
+                let wrote = AXTextTarget(element: el).replace(finalRange, with: cand.converted)
+                // Confirm the field actually changed; some AX shims report
+                // success but leave the word merely selected.
+                let confirmed = wrote &&
+                    axStringForRange(el, CFRange(location: finalRange.location, length: convertedLen)) == cand.converted
+                if confirmed {
+                    _ = axSetSelectedRange(el, NSRange(location: max(0, newCaret), length: 0))
+                }
                 isSynthesizing = false
 
-                if !ok {
-                    fallbackTypeOverSelection(el: el, text: cand.converted, restoreCaretTo: newCaret)
-                } else {
+                if confirmed {
                     let correctedRange = NSRange(location: finalRange.location, length: convertedLen)
                     rememberAXUndo(
                         element: el,
@@ -1441,6 +1464,10 @@ final class AppCoordinator: NSObject {
                         restoreLangPrefix: oppositeLanguagePrefix(cand.targetLangPrefix)
                     )
                     playSwitchSound(); menuBar.updateStatusTitleAndColor()
+                } else {
+                    // The word is still selected — type over it (works where AX
+                    // text mutation doesn't).
+                    fallbackTypeOverSelection(el: el, text: cand.converted, restoreCaretTo: newCaret)
                 }
                 return
             }
@@ -1450,10 +1477,57 @@ final class AppCoordinator: NSObject {
         fallbackNavigateAndReplace(cand)
     }
 
+    /// Undo by locating the exact corrected string in the *currently* focused
+    /// element and replacing it with the original. Works for blind undos too
+    /// (no stored element/range), and matches the corrected text exactly — so a
+    /// punctuation-leading correction like ",fu" is removed whole, not split
+    /// into ",баг". Cleanly collapses the selection afterwards.
+    private func axUndoByText(_ undo: CorrectionUndo) -> Bool {
+        guard let el = axFocusedElement(),
+              let caret = axSelectedRange(el), caret.length == 0,
+              let full = axStringValue(el) else { return false }
+        // Stay in the field the correction happened in, when we know it.
+        if undo.pid != 0, axPID(el) != undo.pid { return false }
+
+        let ns = full as NSString
+        let correctedLen = (undo.corrected as NSString).length
+        guard correctedLen > 0, caret.location >= correctedLen, caret.location <= ns.length else { return false }
+
+        // The (wordsAhead+1)-th last exact occurrence of the corrected text,
+        // ending at or before the caret.
+        var end = caret.location
+        var range = NSRange(location: NSNotFound, length: 0)
+        for _ in 0...max(0, undo.wordsAhead) {
+            let found = ns.range(of: undo.corrected, options: .backwards, range: NSRange(location: 0, length: end))
+            guard found.location != NSNotFound else { return false }
+            range = found
+            end = found.location
+        }
+        guard range.location != NSNotFound else { return false }
+
+        let originalLen = (undo.original as NSString).length
+        isSynthesizing = true
+        let wrote = AXTextTarget(element: el).replace(range, with: undo.original)
+        let confirmed = wrote &&
+            axStringForRange(el, CFRange(location: range.location, length: originalLen)) == undo.original
+        if confirmed {
+            let newCaret = adjustedCaret(caret.location, afterReplacing: range, withLength: originalLen)
+            _ = axSetSelectedRange(el, NSRange(location: max(0, newCaret), length: 0))
+        } else {
+            // Collapse any selection we created so it can't disrupt the next word.
+            _ = axSetSelectedRange(el, NSRange(location: range.location + range.length, length: 0))
+        }
+        isSynthesizing = false
+
+        guard confirmed else { return false }
+        restoreLayoutAfterUndo(undo.restoreLangPrefix)
+        return true
+    }
+
     private func applyAXUndo(_ undo: CorrectionUndo) -> Bool {
         guard let el = undo.element, axPID(el) == undo.pid,
               let caretBefore = axSelectedRange(el),
-              var full = axStringValue(el),
+              let full = axStringValue(el),
               let cr = undo.range else {
             return false
         }
@@ -1466,18 +1540,21 @@ final class AppCoordinator: NSObject {
         }
 
         guard axSetSelectedRange(el, finalRange) else { return false }
-        full = axStringValue(el) ?? full
-        let current = full as NSString
-        let newText = current.replacingCharacters(in: finalRange, with: undo.original)
-
-        isSynthesizing = true
-        let ok = axSetStringValue(el, newText)
+        // Replace just the selected word rather than rewriting the whole value,
+        // which would yank the caret to the start of the field.
         let originalLen = (undo.original as NSString).length
-        let newCaret = adjustedCaret(caretBefore.location, afterReplacing: finalRange, withLength: originalLen)
-        _ = axSetSelectedRange(el, NSRange(location: max(0, newCaret), length: 0))
+        isSynthesizing = true
+        let wrote = AXTextTarget(element: el).replace(finalRange, with: undo.original)
+        // Confirm it took; some AX shims report success without applying the edit.
+        let confirmed = wrote &&
+            axStringForRange(el, CFRange(location: finalRange.location, length: originalLen)) == undo.original
+        if confirmed {
+            let newCaret = adjustedCaret(caretBefore.location, afterReplacing: finalRange, withLength: originalLen)
+            _ = axSetSelectedRange(el, NSRange(location: max(0, newCaret), length: 0))
+        }
         isSynthesizing = false
 
-        guard ok else { return false }
+        guard confirmed else { return false }   // → keystroke fallback (fallbackNavigateAndUndo)
         restoreLayoutAfterUndo(undo.restoreLangPrefix)
         return true
     }
@@ -1542,12 +1619,19 @@ final class AppCoordinator: NSObject {
             self.dlog("[NAVREP] start synth=\(self.isSynthesizing) curID=\(curID) targetID=\(targetID) buffer=\(self.wordParser.buffer)")
             self.isSynthesizing = true
 
-            // Move back to the ambiguous word start
+            // Undo of the most recent correction: the caret is right after the
+            // corrected text, so select it by exact length. Word navigation
+            // would split a leading-punctuation correction (",fu") and leave
+            // the comma behind (",fuбаг"). Other cases still navigate by word.
+            let exactSelect = !recordUndo && cand.wordsAhead == 0
             let stepsLeft = max(1, cand.wordsAhead + 1)
-            for _ in 0..<stepsLeft { self.optLeft() }
 
-            // Select that word, delete selection
-            self.shiftOptRight()
+            if exactSelect {
+                for _ in 0..<cand.original.count { self.shiftLeft() }
+            } else {
+                for _ in 0..<stepsLeft { self.optLeft() }
+                self.shiftOptRight()
+            }
             self.sendBackspace(times: 1)
 
             // Switch to target layout and type converted word
@@ -1563,8 +1647,10 @@ final class AppCoordinator: NSObject {
                         wordsAhead: cand.wordsAhead
                     )
                 }
-                // Return caret to where it was
-                for _ in 0..<stepsLeft { self.optRight() }
+                // Return caret to where it was (word-nav case only)
+                if !exactSelect {
+                    for _ in 0..<stepsLeft { self.optRight() }
+                }
                 self.menuBar.updateStatusTitleAndColor()
                 self.playSwitchSound()
                 self.isSynthesizing = false
@@ -1657,14 +1743,23 @@ extension AppCoordinator {
     }
 
     private func testSimulateUndoOnTestText(_ undo: CorrectionUndo) -> Bool {
+        // Locate the (wordsAhead+1)-th last word to respect how far back the
+        // correction is, then anchor on that word's END and extend left by the
+        // corrected length. The corrected form may start with punctuation —
+        // e.g. "баг" → ",fu" — which a plain word match would split, leaving the
+        // original merely inserted (",fuбаг").
         var searchEnd = testDocumentText.endIndex
-        var targetRange: Range<String.Index>? = nil
+        var wordRange: Range<String.Index>? = nil
         for _ in 0...max(0, undo.wordsAhead) {
             guard let r = lastWordRange(in: testDocumentText[..<searchEnd]) else { return false }
-            targetRange = r
+            wordRange = r
             searchEnd = r.lowerBound
         }
-        guard let range = targetRange, String(testDocumentText[range]) == undo.corrected else { return false }
+        guard let wr = wordRange,
+              let start = testDocumentText.index(wr.upperBound, offsetBy: -undo.corrected.count,
+                                                 limitedBy: testDocumentText.startIndex) else { return false }
+        let range = start..<wr.upperBound
+        guard String(testDocumentText[range]) == undo.corrected else { return false }
         testDocumentText.replaceSubrange(range, with: undo.original)
         return true
     }
@@ -1719,6 +1814,11 @@ extension AppCoordinator {
 
     func testUndoLastCorrectionSynchronously() {
         undoLastCorrection()
+    }
+
+    /// Seed a blind correction-undo for tests.
+    func testRememberBlindUndo(original: String, corrected: String, restoreLangPrefix: String, wordsAhead: Int = 0) {
+        rememberBlindUndo(original: original, corrected: corrected, restoreLangPrefix: restoreLangPrefix, wordsAhead: wordsAhead)
     }
 
     func testSetEditingInsideWordBeforeInput(_ editing: Bool) {
