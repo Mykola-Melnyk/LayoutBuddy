@@ -39,10 +39,9 @@ final class AppCoordinator: NSObject {
     private let permissions = PermissionsManager()
     private var conversionOn = true
     
-    // Diagnostics. Temporarily ON so issues can be traced in a Release/notarized
-    // build via:  log stream --predicate 'subsystem == "mmelnyk.LayoutBuddy"' --style compact
-    // Set back to false before a public release.
-    private let enableDiagnostics = true
+    // Diagnostics. Flip to true to trace via os_log in any build:
+    //   log stream --predicate 'subsystem == "mmelnyk.LayoutBuddy"' --style compact
+    private let enableDiagnostics = false
     private let diagLogger = Logger(subsystem: "mmelnyk.LayoutBuddy", category: "diag")
 
     @inline(__always)
