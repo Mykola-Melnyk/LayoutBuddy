@@ -1003,12 +1003,24 @@ final class AppCoordinator: NSObject {
     private func optLeft()       { tapKeyWithFlags(CGKeyCode(kVK_LeftArrow),  flags: .maskAlternate) }
     private func optRight()      { tapKeyWithFlags(CGKeyCode(kVK_RightArrow), flags: .maskAlternate) }
     private func shiftOptRight() { tapKeyWithFlags(CGKeyCode(kVK_RightArrow), flags: [.maskAlternate, .maskShift]) }
+    private func shiftLeft()     { tapKeyWithFlags(CGKeyCode(kVK_LeftArrow),  flags: .maskShift) }
 
     // Ensure layout really switched before typing
+    // Bumped on every ensureSwitch so a newer switch supersedes older retry
+    // loops. Without this, an in-flight correction's "switch to Ukrainian" loop
+    // keeps firing and overrides a subsequent undo's "switch to English",
+    // leaving the wrong layout active — after which the next word converts as a
+    // no-op and the app appears to "stop correcting".
+    private var switchGeneration = 0
+
     private func ensureSwitch(to targetID: String, attempts: Int = 12, done: @escaping () -> Void) {
+        switchGeneration += 1
+        let generation = switchGeneration
         func attempt(_ n: Int) {
+            guard generation == self.switchGeneration else { done(); return }  // superseded
             self.layoutManager.switchLayout(to: targetID)
             DispatchQueue.main.asyncAfter(deadline: .now() + Timing.layoutSettle) {
+                guard generation == self.switchGeneration else { done(); return }
                 if self.layoutManager.currentInputSourceID() == targetID || n >= attempts { done() }
                 else { attempt(n + 1) }
             }
@@ -1555,12 +1567,19 @@ final class AppCoordinator: NSObject {
             self.dlog("[NAVREP] start synth=\(self.isSynthesizing) curID=\(curID) targetID=\(targetID) buffer=\(self.wordParser.buffer)")
             self.isSynthesizing = true
 
-            // Move back to the ambiguous word start
+            // Undo of the most recent correction: the caret is right after the
+            // corrected text, so select it by exact length. Word navigation
+            // would split a leading-punctuation correction (",fu") and leave
+            // the comma behind (",fuбаг"). Other cases still navigate by word.
+            let exactSelect = !recordUndo && cand.wordsAhead == 0
             let stepsLeft = max(1, cand.wordsAhead + 1)
-            for _ in 0..<stepsLeft { self.optLeft() }
 
-            // Select that word, delete selection
-            self.shiftOptRight()
+            if exactSelect {
+                for _ in 0..<cand.original.count { self.shiftLeft() }
+            } else {
+                for _ in 0..<stepsLeft { self.optLeft() }
+                self.shiftOptRight()
+            }
             self.sendBackspace(times: 1)
 
             // Switch to target layout and type converted word
@@ -1576,8 +1595,10 @@ final class AppCoordinator: NSObject {
                         wordsAhead: cand.wordsAhead
                     )
                 }
-                // Return caret to where it was
-                for _ in 0..<stepsLeft { self.optRight() }
+                // Return caret to where it was (word-nav case only)
+                if !exactSelect {
+                    for _ in 0..<stepsLeft { self.optRight() }
+                }
                 self.menuBar.updateStatusTitleAndColor()
                 self.playSwitchSound()
                 self.isSynthesizing = false
@@ -1670,14 +1691,23 @@ extension AppCoordinator {
     }
 
     private func testSimulateUndoOnTestText(_ undo: CorrectionUndo) -> Bool {
+        // Locate the (wordsAhead+1)-th last word to respect how far back the
+        // correction is, then anchor on that word's END and extend left by the
+        // corrected length. The corrected form may start with punctuation —
+        // e.g. "баг" → ",fu" — which a plain word match would split, leaving the
+        // original merely inserted (",fuбаг").
         var searchEnd = testDocumentText.endIndex
-        var targetRange: Range<String.Index>? = nil
+        var wordRange: Range<String.Index>? = nil
         for _ in 0...max(0, undo.wordsAhead) {
             guard let r = lastWordRange(in: testDocumentText[..<searchEnd]) else { return false }
-            targetRange = r
+            wordRange = r
             searchEnd = r.lowerBound
         }
-        guard let range = targetRange, String(testDocumentText[range]) == undo.corrected else { return false }
+        guard let wr = wordRange,
+              let start = testDocumentText.index(wr.upperBound, offsetBy: -undo.corrected.count,
+                                                 limitedBy: testDocumentText.startIndex) else { return false }
+        let range = start..<wr.upperBound
+        guard String(testDocumentText[range]) == undo.corrected else { return false }
         testDocumentText.replaceSubrange(range, with: undo.original)
         return true
     }
@@ -1732,6 +1762,11 @@ extension AppCoordinator {
 
     func testUndoLastCorrectionSynchronously() {
         undoLastCorrection()
+    }
+
+    /// Seed a blind correction-undo for tests.
+    func testRememberBlindUndo(original: String, corrected: String, restoreLangPrefix: String, wordsAhead: Int = 0) {
+        rememberBlindUndo(original: original, corrected: corrected, restoreLangPrefix: restoreLangPrefix, wordsAhead: wordsAhead)
     }
 
     func testSetEditingInsideWordBeforeInput(_ editing: Bool) {

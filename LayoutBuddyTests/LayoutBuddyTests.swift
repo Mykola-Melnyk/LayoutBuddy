@@ -242,6 +242,38 @@ final class LayoutBuddyTests: XCTestCase {
         XCTAssertEqual(target.writeCount, 0)
     }
 
+    // Bug: undoing a correction whose corrected form starts with punctuation
+    // (e.g. uk "баг" → ",fu") left ",fuбаг" because the undo located the word
+    // by letter-run and missed the leading comma.
+    func testUndoRestoresPunctuationLeadingCorrection() {
+        let app = makeApp()
+        app.testDocumentText = ",fu"   // "баг" was force-corrected to ",fu"
+        app.testRememberBlindUndo(original: "баг", corrected: ",fu", restoreLangPrefix: "uk")
+
+        app.testUndoLastCorrectionSynchronously()
+
+        XCTAssertEqual(app.testCapturedText(), "баг")   // not ",fuбаг" / ",fu"
+    }
+
+    // Bug: after Undo Last Correction the next word stopped auto-correcting.
+    // Conversion logic must keep working after an undo.
+    func testConversionStillWorksAfterUndo() throws {
+        let app = makeApp()
+
+        try type("csv", into: app)
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: " "))
+        XCTAssertEqual(app.testCapturedText(), "сім ")
+
+        app.testUndoLastCorrectionSynchronously()
+        XCTAssertEqual(app.testCapturedText(), "csv ")
+
+        // The next mistyped word must still convert.
+        try type("afqke", into: app)
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: " "))
+        XCTAssertTrue(app.testCapturedText().contains("файлу"),
+                      "expected conversion to resume, got: \(app.testCapturedText())")
+    }
+
     func testDeleteClearsBufferWithoutConversion() throws {
         let app = makeApp()
 
