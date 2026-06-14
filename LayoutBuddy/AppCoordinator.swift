@@ -603,17 +603,16 @@ final class AppCoordinator: NSObject {
         dlog("[PROC] entry buffer=\(wordParser.buffer)")
 
         let curID = layoutManager.currentInputSourceID()
-        let curLangPrefix: String
-        if (isRunningUnitTests || testSimulationMode) {
-            if let first = wordParser.buffer.unicodeScalars.first,
-               wordParser.isCyrillicLetter(first) {
-                curLangPrefix = "uk"
-            } else {
-                curLangPrefix = "en"
-            }
-        } else {
-            curLangPrefix = isLayoutUkrainian(curID) ? "uk" : "en"
+        // Decide the source language from what was actually TYPED (the buffer's
+        // script), NOT the live keyboard layout. The layout can drift between
+        // typing the word and hitting the boundary — and especially right after
+        // an undo — so `currentInputSourceID()` may report ABC/English while the
+        // buffer holds Cyrillic (or vice-versa), which misclassifies the word
+        // and silently skips conversion. The buffer is ground truth.
+        let firstLetter = wordParser.buffer.unicodeScalars.first {
+            wordParser.isLatinLetter($0) || wordParser.isCyrillicLetter($0)
         }
+        let curLangPrefix = (firstLetter.map { wordParser.isCyrillicLetter($0) } ?? false) ? "uk" : "en"
         let otherLangPrefix = (curLangPrefix == "en") ? "uk" : "en"
 
         let (core, _) = wordParser.splitTrailingMapped(wordParser.buffer)

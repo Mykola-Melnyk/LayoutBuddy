@@ -274,6 +274,15 @@ final class LayoutBuddyTests: XCTestCase {
                       "expected conversion to resume, got: \(app.testCapturedText())")
     }
 
+    // The source language is decided by the typed script (buffer), not the live
+    // keyboard layout (which drifts). A correctly-typed Cyrillic word is kept.
+    func testCorrectlyTypedCyrillicWordIsKept() throws {
+        let app = makeApp()
+        try type("файлу", into: app)
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: " "))
+        XCTAssertEqual(app.testCapturedText(), "")   // valid uk word → nothing replaced
+    }
+
     func testDeleteClearsBufferWithoutConversion() throws {
         let app = makeApp()
 
