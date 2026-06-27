@@ -163,8 +163,12 @@ final class AppCoordinator: NSObject {
 
     // MARK: - App lifecycle
 
-    init(preferences: LayoutPreferences = LayoutPreferences()) {
+    let userDictionary: UserDictionary
+
+    init(preferences: LayoutPreferences = LayoutPreferences(),
+         userDictionary: UserDictionary = UserDictionary()) {
         self.preferences = preferences
+        self.userDictionary = userDictionary
         self.layoutManager = KeyboardLayoutManager(preferences: preferences)
         self.menuBar = MenuBarController(layoutManager: layoutManager, preferences: preferences)
         super.init()
@@ -227,6 +231,9 @@ final class AppCoordinator: NSObject {
         if !eventTapController.start() {
             dlog("[EVENT TAP] failed to start; check Input Monitoring and Accessibility permissions")
         }
+        // Right-click → Services → "Add to LayoutBuddy: …" on selected text.
+        NSApp.servicesProvider = self
+        NSUpdateDynamicServices()
         // Walk the user through granting Accessibility + Input Monitoring on
         // first launch (or whenever a permission is missing).
         permissions.refresh()
@@ -237,6 +244,28 @@ final class AppCoordinator: NSObject {
 
     func stop() {
         eventTapController.stop()
+    }
+
+    // MARK: - Services (right-click → Services → Add to LayoutBuddy: …)
+
+    @objc func addWordToEnglish(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>?) {
+        addSelectedWord(from: pboard, to: [.english])
+    }
+
+    @objc func addWordToUkrainian(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>?) {
+        addSelectedWord(from: pboard, to: [.ukrainian])
+    }
+
+    @objc func addWordToBoth(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>?) {
+        addSelectedWord(from: pboard, to: [.english, .ukrainian])
+    }
+
+    private func addSelectedWord(from pboard: NSPasteboard, to languages: Set<UserDictionary.Language>) {
+        guard let text = pboard.string(forType: .string) else { return }
+        // The selection may include surrounding whitespace; take its first word.
+        let word = text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).first.map(String.init) ?? text
+        let added = userDictionary.add(word, to: languages)
+        if !added.isEmpty { playSwitchSound() }
     }
 
     // MARK: - Onboarding / permissions
@@ -298,7 +327,7 @@ final class AppCoordinator: NSObject {
 
             eventTapController.stop()
 
-            let controller = NSHostingController(rootView: SettingsView())
+            let controller = NSHostingController(rootView: SettingsView(dictionary: userDictionary))
             let window = NSWindow(contentViewController: controller)
             window.title = "Settings"
             window.center()
@@ -595,6 +624,13 @@ final class AppCoordinator: NSObject {
         return miss.location == NSNotFound
     }
 
+    /// Whether `word` counts as a valid word of `langPrefix` ("en"/"uk") — the
+    /// user's custom dictionary first, then the system spell-checker.
+    private func isValidWord(_ word: String, langPrefix: String, spellLanguage: String) -> Bool {
+        userDictionary.contains(word, languagePrefix: langPrefix)
+            || isSpelledCorrect(word, language: spellLanguage)
+    }
+
     // MARK: - Process a completed word
 
     private func processBufferedWordIfNeeded(keepFollowingBoundary: Bool = false, boundaryEvent: CGEvent? = nil) -> Bool {
@@ -625,12 +661,12 @@ final class AppCoordinator: NSObject {
 
         // Single-letter policy
         if core.count == 1 {
-            let curOK = isSpelledCorrect(core, language: curSpell)
+            let curOK = isValidWord(core, langPrefix: curLangPrefix, spellLanguage: curSpell)
             let converted1 = convert(core, from: curLangPrefix, to: otherLangPrefix)
             dlog("[PROC] converted=\(converted1)")
             // If nothing mapped, the "other language" form is identical — there
             // is no real alternative to consider.
-            let otherOK = converted1 != core && !converted1.isEmpty && isSpelledCorrect(converted1, language: otherSpell)
+            let otherOK = converted1 != core && !converted1.isEmpty && isValidWord(converted1, langPrefix: otherLangPrefix, spellLanguage: otherSpell)
 
             if curOK && otherOK {
                 captureAmbiguityLater(original: core, converted: converted1, targetLangPrefix: otherLangPrefix)
@@ -648,10 +684,10 @@ final class AppCoordinator: NSObject {
             }
         }
 
-        let curOK = !suspiciousEN && isSpelledCorrect(core, language: curSpell)
+        let curOK = !suspiciousEN && isValidWord(core, langPrefix: curLangPrefix, spellLanguage: curSpell)
         let convertedCore = convert(core, from: curLangPrefix, to: otherLangPrefix)
         // If nothing mapped, the "other language" form is identical — skip it.
-        let otherOK = convertedCore != core && !convertedCore.isEmpty && isSpelledCorrect(convertedCore, language: otherSpell)
+        let otherOK = convertedCore != core && !convertedCore.isEmpty && isValidWord(convertedCore, langPrefix: otherLangPrefix, spellLanguage: otherSpell)
         dlog("[PROC] decision curID=\(curID) curLang=\(curLangPrefix) core=\(core) converted=\(convertedCore) curOK=\(curOK) otherOK=\(otherOK)")
 
         // Tie: both valid → save candidate, no auto-change
