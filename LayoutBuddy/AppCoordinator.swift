@@ -302,7 +302,7 @@ final class AppCoordinator: NSObject {
 
             eventTapController.stop()
 
-            let controller = NSHostingController(rootView: SettingsView())
+            let controller = NSHostingController(rootView: SettingsView(dictionary: userDictionary))
             let window = NSWindow(contentViewController: controller)
             window.title = "Settings"
             window.center()
