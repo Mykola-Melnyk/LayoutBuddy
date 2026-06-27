@@ -276,6 +276,25 @@ final class LayoutBuddyTests: XCTestCase {
 
     // The source language is decided by the typed script (buffer), not the live
     // keyboard layout (which drifts). A correctly-typed Cyrillic word is kept.
+    // A word the user adds to their dictionary is treated as valid in that
+    // language, so the converter no longer "fixes" it.
+    func testDictionaryWordSuppressesConversion() throws {
+        let dict = UserDictionary(defaults: try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString)))
+        let app = makeApp(dictionary: dict)
+
+        // Control: without an entry, "ghbdsn" converts to "привіт".
+        try type("ghbdsn", into: app)
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: " "))
+        XCTAssertEqual(app.testCapturedText(), "привіт ")
+
+        // Add the Latin form to English → now valid in both → a tie → not changed.
+        app.testDocumentText = ""
+        dict.add("ghbdsn", to: [.english])
+        try type("ghbdsn", into: app)
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: " "))
+        XCTAssertEqual(app.testCapturedText(), "")   // left as typed
+    }
+
     func testCorrectlyTypedCyrillicWordIsKept() throws {
         let app = makeApp()
         try type("файлу", into: app)
@@ -552,8 +571,11 @@ final class LayoutBuddyTests: XCTestCase {
         XCTAssertTrue(app.testWordBuffer.isEmpty)
     }
 
-    private func makeApp(preferences: LayoutPreferences = LayoutPreferences()) -> AppCoordinator {
-        let app = AppCoordinator(preferences: preferences)
+    private func makeApp(preferences: LayoutPreferences = LayoutPreferences(),
+                         dictionary: UserDictionary? = nil) -> AppCoordinator {
+        // Isolate the dictionary per test so it never touches real user data.
+        let dict = dictionary ?? UserDictionary(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        let app = AppCoordinator(preferences: preferences, userDictionary: dict)
         app.testSetSimulationMode(true)
         return app
     }
@@ -722,6 +744,49 @@ final class WordParserTests: XCTestCase {
         XCTAssertEqual(p.buffer, "a")
         p.clear()
         XCTAssertTrue(p.buffer.isEmpty)
+    }
+}
+
+// MARK: - UserDictionary
+
+final class UserDictionaryTests: XCTestCase {
+    private func makeDict() throws -> UserDictionary {
+        UserDictionary(defaults: try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString)))
+    }
+
+    func testAddContainsRemoveIsCaseInsensitive() throws {
+        let d = try makeDict()
+        d.add("Kyiv", to: [.english])
+        XCTAssertTrue(d.contains("kyiv", languagePrefix: "en"))
+        XCTAssertTrue(d.contains("KYIV", languagePrefix: "en"))
+        XCTAssertFalse(d.contains("kyiv", languagePrefix: "uk"))
+        d.remove("kyiv", from: .english)
+        XCTAssertFalse(d.contains("kyiv", languagePrefix: "en"))
+    }
+
+    func testAddToBothLanguages() throws {
+        let d = try makeDict()
+        d.add("баг", to: [.english, .ukrainian])
+        XCTAssertTrue(d.contains("баг", languagePrefix: "en"))
+        XCTAssertTrue(d.contains("баг", languagePrefix: "uk"))
+    }
+
+    func testTrimsWhitespaceAndIgnoresEmpty() throws {
+        let d = try makeDict()
+        d.add("  hello  ", to: [.english])
+        XCTAssertTrue(d.contains("hello", languagePrefix: "en"))
+        XCTAssertEqual(d.add("   ", to: [.english]), [])   // blank → no-op
+    }
+
+    func testPersistsAcrossInstances() throws {
+        let name = UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        UserDictionary(defaults: defaults).add("файл", to: [.ukrainian])
+        let reloaded = UserDictionary(defaults: defaults)
+        XCTAssertTrue(reloaded.contains("файл", languagePrefix: "uk"))
+        XCTAssertEqual(reloaded.words(for: .ukrainian), ["файл"])
     }
 }
 
