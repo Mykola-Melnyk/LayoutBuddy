@@ -231,6 +231,9 @@ final class AppCoordinator: NSObject {
         if !eventTapController.start() {
             dlog("[EVENT TAP] failed to start; check Input Monitoring and Accessibility permissions")
         }
+        // Right-click → Services → "Add to LayoutBuddy: …" on selected text.
+        NSApp.servicesProvider = self
+        NSUpdateDynamicServices()
         // Walk the user through granting Accessibility + Input Monitoring on
         // first launch (or whenever a permission is missing).
         permissions.refresh()
@@ -241,6 +244,28 @@ final class AppCoordinator: NSObject {
 
     func stop() {
         eventTapController.stop()
+    }
+
+    // MARK: - Services (right-click → Services → Add to LayoutBuddy: …)
+
+    @objc func addWordToEnglish(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>?) {
+        addSelectedWord(from: pboard, to: [.english])
+    }
+
+    @objc func addWordToUkrainian(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>?) {
+        addSelectedWord(from: pboard, to: [.ukrainian])
+    }
+
+    @objc func addWordToBoth(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>?) {
+        addSelectedWord(from: pboard, to: [.english, .ukrainian])
+    }
+
+    private func addSelectedWord(from pboard: NSPasteboard, to languages: Set<UserDictionary.Language>) {
+        guard let text = pboard.string(forType: .string) else { return }
+        // The selection may include surrounding whitespace; take its first word.
+        let word = text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).first.map(String.init) ?? text
+        let added = userDictionary.add(word, to: languages)
+        if !added.isEmpty { playSwitchSound() }
     }
 
     // MARK: - Onboarding / permissions

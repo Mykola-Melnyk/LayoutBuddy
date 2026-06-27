@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Partial Info.plist: custom keys only. GENERATE_INFOPLIST_FILE merges the
+  standard keys (LSUIElement, versions, etc.) on top of this at build time.
+-->
+<plist version="1.0">
+<dict>
+	<key>NSServices</key>
+	<array>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>Add to LayoutBuddy: English</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>addWordToEnglish</string>
+			<key>NSPortName</key>
+			<string>LayoutBuddy</string>
+			<key>NSSendTypes</key>
+			<array>
+				<string>public.utf8-plain-text</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>Add to LayoutBuddy: Ukrainian</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>addWordToUkrainian</string>
+			<key>NSPortName</key>
+			<string>LayoutBuddy</string>
+			<key>NSSendTypes</key>
+			<array>
+				<string>public.utf8-plain-text</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>Add to LayoutBuddy: Both</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>addWordToBoth</string>
+			<key>NSPortName</key>
+			<string>LayoutBuddy</string>
+			<key>NSSendTypes</key>
+			<array>
+				<string>public.utf8-plain-text</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
