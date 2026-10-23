@@ -15,7 +15,12 @@ final class EventTapController {
     func start() -> Bool {
         if eventTap != nil { return true }
 
+        // Mouse-downs are observed (never altered) so a click — which moves the
+        // caret somewhere we can't see — invalidates the typed-word buffer.
         let mask = (1 << CGEventType.keyDown.rawValue)
+            | (1 << CGEventType.leftMouseDown.rawValue)
+            | (1 << CGEventType.rightMouseDown.rawValue)
+            | (1 << CGEventType.otherMouseDown.rawValue)
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
@@ -52,7 +57,10 @@ final class EventTapController {
             }
             return Unmanaged.passUnretained(event)
         }
-        guard type == .keyDown else { return Unmanaged.passUnretained(event) }
+        switch type {
+        case .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown: break
+        default: return Unmanaged.passUnretained(event)
+        }
         guard let delegate = controller.delegate else { return Unmanaged.passUnretained(event) }
         return delegate.handle(event: event)
     }

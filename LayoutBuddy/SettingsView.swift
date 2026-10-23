@@ -2,15 +2,91 @@ import SwiftUI
 import ServiceManagement
 
 struct SettingsView: View {
+    @ObservedObject var dictionary: UserDictionary
+
+    init(dictionary: UserDictionary = UserDictionary()) {
+        self.dictionary = dictionary
+    }
+
     var body: some View {
         TabView {
             GeneralSettingsView()
                 .tabItem { Text("General") }
             ShortcutsSettingsView()
                 .tabItem { Text("Shortcuts") }
+            DictionarySettingsView(dictionary: dictionary)
+                .tabItem { Text("Dictionary") }
         }
         .padding(20)
         .frame(width: 720)
+    }
+}
+
+private struct DictionarySettingsView: View {
+    @ObservedObject var dictionary: UserDictionary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Words added here are treated as correctly spelled, so LayoutBuddy won't auto-convert them. Add words via right-click → Services, or below.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(alignment: .top, spacing: 16) {
+                DictionaryColumn(language: .english, dictionary: dictionary)
+                DictionaryColumn(language: .ukrainian, dictionary: dictionary)
+            }
+            Spacer()
+        }
+    }
+}
+
+private struct DictionaryColumn: View {
+    let language: UserDictionary.Language
+    @ObservedObject var dictionary: UserDictionary
+    @State private var newWord = ""
+
+    private var words: [String] { dictionary.words(for: language) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(language.displayName).font(.headline)
+                Spacer()
+                Text("\(words.count)").foregroundStyle(.secondary)
+            }
+
+            List {
+                ForEach(words, id: \.self) { word in
+                    HStack {
+                        Text(word)
+                        Spacer()
+                        Button {
+                            dictionary.remove(word, from: language)
+                        } label: {
+                            Image(systemName: "minus.circle.fill")
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .frame(height: 260)
+
+            HStack {
+                TextField("Add a word…", text: $newWord)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(add)
+                Button("Add", action: add)
+                    .disabled(newWord.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func add() {
+        dictionary.add(newWord, to: [language])
+        newWord = ""
     }
 }
 

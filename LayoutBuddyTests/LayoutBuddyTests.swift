@@ -121,6 +121,18 @@ final class LayoutBuddyTests: XCTestCase {
         XCTAssertNil(planReplace("ghbdsn", caret: 3, original: "ghbdsn", converted: "привіт"))
     }
 
+    func testIsWholeWordBeforeCaret() {
+        func whole(_ text: String, _ caret: Int, _ word: String) -> Bool {
+            WordReplacementPlanner.isWholeWord(word, beforeCaret: caret, in: text as NSString)
+        }
+        XCTAssertTrue(whole("ghbdsn", 6, "ghbdsn"))                 // start of field
+        XCTAssertTrue(whole("hi ghbdsn ", 10, "ghbdsn"))            // boundary already landed
+        XCTAssertTrue(whole("hi ghbdsn more", 9, "ghbdsn"))
+        XCTAssertFalse(whole("foocsv", 6, "csv"))                   // tail of a longer word
+        XCTAssertFalse(whole("csvfoo", 3, "csv"))                   // glued to letters after the caret
+        XCTAssertFalse(whole("hi ghbd", 7, "ghbdsn"))               // not in the field (yet)
+    }
+
     func testPlanLastWordConvertsTrailingWord() {
         let plan = WordReplacementPlanner.planLastWord(
             fullText: "hello ghbdsn" as NSString, caret: 12,
@@ -229,9 +241,34 @@ final class LayoutBuddyTests: XCTestCase {
         XCTAssertFalse(app.replaceWord(on: target, original: "ghbdsn", converted: "привіт",
                                        boundaryToInsert: " ", restoreLangPrefix: "en"))
         XCTAssertEqual(target.text, "ghbdsn")                              // genuinely unchanged
-        // Caret collapsed to the end of the original word so the keystroke
-        // fallback deletes the right characters.
+        // Caret back where it was, so the keystroke fallback deletes the right characters.
         XCTAssertEqual(target.selection, NSRange(location: 6, length: 0))
+    }
+
+    // Bug: Telegram applies the AX edit but reports a failure; trusting the
+    // error made the keystroke fallback correct the word a second time.
+    func testAXEditThatReportsFailureButAppliesCountsAsDone() {
+        let app = makeApp()
+        let target = FakeTextTarget("ok ghbdsn", caret: 9)
+        target.applyButReportFailure = true
+
+        XCTAssertTrue(app.replaceWord(on: target, original: "ghbdsn", converted: "привіт",
+                                      boundaryToInsert: " ", restoreLangPrefix: "en"))
+        XCTAssertEqual(target.text, "ok привіт ")
+        XCTAssertEqual(target.selection, NSRange(location: 10, length: 0))
+    }
+
+    // Bug: the boundary was already in the field ("ghbdsn |"). A failed AX edit
+    // left the caret before the space, so the fallback's step back over the
+    // space landed before "n" and the result was "привітn".
+    func testFailedAXEditRestoresCaretAfterTypedBoundary() {
+        let app = makeApp()
+        let target = FakeTextTarget("ghbdsn ", caret: 7)
+        target.lieOnReplace = true
+
+        XCTAssertFalse(app.replaceWord(on: target, original: "ghbdsn", converted: "привіт",
+                                       boundaryToInsert: nil, restoreLangPrefix: "en"))
+        XCTAssertEqual(target.selection, NSRange(location: 7, length: 0))
     }
 
     func testCorrectLastWordOnTargetNoOpReturnsFalse() {
@@ -276,6 +313,25 @@ final class LayoutBuddyTests: XCTestCase {
 
     // The source language is decided by the typed script (buffer), not the live
     // keyboard layout (which drifts). A correctly-typed Cyrillic word is kept.
+    // A word the user adds to their dictionary is treated as valid in that
+    // language, so the converter no longer "fixes" it.
+    func testDictionaryWordSuppressesConversion() throws {
+        let dict = UserDictionary(defaults: try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString)))
+        let app = makeApp(dictionary: dict)
+
+        // Control: without an entry, "ghbdsn" converts to "привіт".
+        try type("ghbdsn", into: app)
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: " "))
+        XCTAssertEqual(app.testCapturedText(), "привіт ")
+
+        // Add the Latin form to English → now valid in both → a tie → not changed.
+        app.testDocumentText = ""
+        dict.add("ghbdsn", to: [.english])
+        try type("ghbdsn", into: app)
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: " "))
+        XCTAssertEqual(app.testCapturedText(), "")   // left as typed
+    }
+
     func testCorrectlyTypedCyrillicWordIsKept() throws {
         let app = makeApp()
         try type("файлу", into: app)
@@ -476,23 +532,51 @@ final class LayoutBuddyTests: XCTestCase {
         XCTAssertTrue(app.testWordBuffer.isEmpty)
     }
 
-    func testMidWordEditDoesNotConvertBufferedWord() throws {
+    func testClickMidWordDropsBufferAndSkipsTheFragment() throws {
         let app = makeApp()
 
         try type("цщклі", into: app)
-        app.testSetEditingInsideWordBeforeInput(true)
-
-        let editEvent = try keyEvent(character: "a")
-        let editResult = app.testHandleKeyEvent(type: .keyDown, event: editEvent)
-
-        XCTAssertTrue(editResult?.takeUnretainedValue() === editEvent)
+        _ = app.testHandleKeyEvent(type: .leftMouseDown, event: try mouseDownEvent())
         XCTAssertTrue(app.testWordBuffer.isEmpty)
 
-        app.testSetEditingInsideWordBeforeInput(false)
-        let boundaryEvent = try keyEvent(character: "!")
-        let boundaryResult = app.testHandleKeyEvent(type: .keyDown, event: boundaryEvent)
+        // The caret may now sit inside an existing word: what follows is a
+        // fragment and must not be converted, even though it would be alone.
+        try type("цщклі", into: app)
+        let boundary = try keyEvent(character: "!")
+        let returned = app.testHandleKeyEvent(type: .keyDown, event: boundary)?.takeUnretainedValue()
+        XCTAssertTrue(returned === boundary)
+        XCTAssertEqual(app.testCapturedText(), "")
+    }
 
-        XCTAssertTrue(boundaryResult?.takeUnretainedValue() === boundaryEvent)
+    func testConversionResumesAfterAnObservedBoundary() throws {
+        let app = makeApp()
+
+        _ = app.testHandleKeyEvent(type: .leftMouseDown, event: try mouseDownEvent())
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: " "))
+
+        try type("цщклі", into: app)
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: "!"))
+        XCTAssertEqual(app.testCapturedText(), "works!")
+    }
+
+    func testOptionDeleteDropsBuffer() throws {
+        let app = makeApp()
+        try type("ghbdsn", into: app)
+
+        let optDelete = try keyEvent(keyCode: CGKeyCode(kVK_Delete), flags: .maskAlternate)
+        let returned = app.testHandleKeyEvent(type: .keyDown, event: optDelete)?.takeUnretainedValue()
+
+        XCTAssertTrue(returned === optDelete)
+        XCTAssertTrue(app.testWordBuffer.isEmpty)
+    }
+
+    func testBackspaceIntoOlderTextSkipsTheNextFragment() throws {
+        let app = makeApp()
+
+        // Empty buffer + backspace: we're now editing a word typed earlier.
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(keyCode: CGKeyCode(kVK_Delete)))
+        try type("csv", into: app)
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: " "))
         XCTAssertEqual(app.testCapturedText(), "")
     }
 
@@ -518,18 +602,22 @@ final class LayoutBuddyTests: XCTestCase {
         XCTAssertTrue(app.testWordBuffer.isEmpty)
     }
 
-    func testCommandShortcutPassesThroughWithoutBuffering() throws {
+    func testCommandShortcutPassesThroughAndDropsBuffer() throws {
         let app = makeApp()
-        app.testWordBuffer = "hel"
+        try type("csv", into: app)
 
-        let event = try keyEvent(character: "a", flags: .maskCommand)
+        // ⌘V may have pasted text into the middle of what we buffered.
+        let event = try keyEvent(character: "v", flags: .maskCommand)
         let returned = app.testHandleKeyEvent(type: .keyDown, event: event)?.takeUnretainedValue()
-
         XCTAssertTrue(returned === event)
-        XCTAssertEqual(app.testWordBuffer, "hel")   // shortcut must not edit the word buffer
+        XCTAssertTrue(app.testWordBuffer.isEmpty)
+
+        try type("csv", into: app)
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: " "))
+        XCTAssertEqual(app.testCapturedText(), "")   // fragment after the paste is left alone
     }
 
-    func testOptionComboPassesThroughWithoutBuffering() throws {
+    func testOptionComboPassesThroughAndDropsBuffer() throws {
         let app = makeApp()
         app.testWordBuffer = "hel"
 
@@ -537,7 +625,7 @@ final class LayoutBuddyTests: XCTestCase {
         let returned = app.testHandleKeyEvent(type: .keyDown, event: event)?.takeUnretainedValue()
 
         XCTAssertTrue(returned === event)
-        XCTAssertEqual(app.testWordBuffer, "hel")
+        XCTAssertTrue(app.testWordBuffer.isEmpty)
     }
 
     func testValidEnglishWordIsNotConverted() throws {
@@ -552,8 +640,11 @@ final class LayoutBuddyTests: XCTestCase {
         XCTAssertTrue(app.testWordBuffer.isEmpty)
     }
 
-    private func makeApp(preferences: LayoutPreferences = LayoutPreferences()) -> AppCoordinator {
-        let app = AppCoordinator(preferences: preferences)
+    private func makeApp(preferences: LayoutPreferences = LayoutPreferences(),
+                         dictionary: UserDictionary? = nil) -> AppCoordinator {
+        // Isolate the dictionary per test so it never touches real user data.
+        let dict = dictionary ?? UserDictionary(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        let app = AppCoordinator(preferences: preferences, userDictionary: dict)
         app.testSetSimulationMode(true)
         return app
     }
@@ -574,6 +665,11 @@ final class LayoutBuddyTests: XCTestCase {
         return event
     }
 
+    private func mouseDownEvent() throws -> CGEvent {
+        try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown,
+                              mouseCursorPosition: .zero, mouseButton: .left))
+    }
+
     private func firstCharacterCode(from event: CGEvent) throws -> UniChar {
         var value: UniChar = 0
         var length = 0
@@ -591,6 +687,7 @@ final class FakeTextTarget: TextTarget {
     private var caret: NSRange
     var failWrite = false
     var lieOnReplace = false   // mimic an AX shim that reports success but doesn't apply the edit
+    var applyButReportFailure = false   // mimic Telegram: applies the edit, returns an error
     private(set) var writeCount = 0
     private(set) var selectCount = 0
 
@@ -617,7 +714,14 @@ final class FakeTextTarget: TextTarget {
 
     func replace(_ range: NSRange, with text: String) -> Bool {
         guard !failWrite else { return false }
-        if lieOnReplace { return true }   // success reported, but nothing changes
+        if lieOnReplace { caret = range; return true }   // word selected, success reported, text unchanged
+        if applyButReportFailure {
+            let mutable = content.mutableCopy() as! NSMutableString
+            mutable.replaceCharacters(in: range, with: text)
+            content = mutable
+            caret = NSRange(location: range.location + (text as NSString).length, length: 0)
+            return false
+        }
         let mutable = content.mutableCopy() as! NSMutableString
         mutable.replaceCharacters(in: range, with: text)
         content = mutable
@@ -722,6 +826,49 @@ final class WordParserTests: XCTestCase {
         XCTAssertEqual(p.buffer, "a")
         p.clear()
         XCTAssertTrue(p.buffer.isEmpty)
+    }
+}
+
+// MARK: - UserDictionary
+
+final class UserDictionaryTests: XCTestCase {
+    private func makeDict() throws -> UserDictionary {
+        UserDictionary(defaults: try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString)))
+    }
+
+    func testAddContainsRemoveIsCaseInsensitive() throws {
+        let d = try makeDict()
+        d.add("Kyiv", to: [.english])
+        XCTAssertTrue(d.contains("kyiv", languagePrefix: "en"))
+        XCTAssertTrue(d.contains("KYIV", languagePrefix: "en"))
+        XCTAssertFalse(d.contains("kyiv", languagePrefix: "uk"))
+        d.remove("kyiv", from: .english)
+        XCTAssertFalse(d.contains("kyiv", languagePrefix: "en"))
+    }
+
+    func testAddToBothLanguages() throws {
+        let d = try makeDict()
+        d.add("баг", to: [.english, .ukrainian])
+        XCTAssertTrue(d.contains("баг", languagePrefix: "en"))
+        XCTAssertTrue(d.contains("баг", languagePrefix: "uk"))
+    }
+
+    func testTrimsWhitespaceAndIgnoresEmpty() throws {
+        let d = try makeDict()
+        d.add("  hello  ", to: [.english])
+        XCTAssertTrue(d.contains("hello", languagePrefix: "en"))
+        XCTAssertEqual(d.add("   ", to: [.english]), [])   // blank → no-op
+    }
+
+    func testPersistsAcrossInstances() throws {
+        let name = UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        UserDictionary(defaults: defaults).add("файл", to: [.ukrainian])
+        let reloaded = UserDictionary(defaults: defaults)
+        XCTAssertTrue(reloaded.contains("файл", languagePrefix: "uk"))
+        XCTAssertEqual(reloaded.words(for: .ukrainian), ["файл"])
     }
 }
 

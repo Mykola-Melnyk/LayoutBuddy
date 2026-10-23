@@ -16,6 +16,7 @@ enum WordReplacementPlanner {
         let replacedRange: NSRange   // the original word's range in the pre-edit text
         let replacement: String      // converted text (+ any baked boundary)
         let newText: String
+        let originalCaret: Int       // caret before the edit, to restore if it fails
         let newCaret: Int
         let correctedRange: NSRange   // the converted word's range in the post-edit text
         let before: String
@@ -58,6 +59,26 @@ enum WordReplacementPlanner {
         return finish(ns: ns, caret: caret, wordRange: found, original: original,
                       converted: converted, boundaryToInsert: boundaryToInsert,
                       contextRadius: contextRadius)
+    }
+
+    /// Whether `word` sits just before the caret (allowing the same short
+    /// boundary gap as `planReplacement`) as a whole word — not the tail of a
+    /// longer word, and not glued to letters right after the caret.
+    static func isWholeWord(_ word: String, beforeCaret caret: Int, in ns: NSString) -> Bool {
+        let length = (word as NSString).length
+        guard length > 0, caret >= length, caret <= ns.length else { return false }
+        let found = ns.range(of: word, options: .backwards, range: NSRange(location: 0, length: caret))
+        guard found.location != NSNotFound else { return false }
+        let end = found.location + found.length
+        let gap = caret - end
+        guard gap >= 0, gap <= 2 else { return false }
+        if gap > 0 {
+            let between = ns.substring(with: NSRange(location: end, length: gap))
+            guard between.unicodeScalars.allSatisfy({ !isLetter($0) }) else { return false }
+        } else if caret < ns.length, isWordChar(scalar(ns, caret)) {
+            return false
+        }
+        return found.location == 0 || !isWordChar(scalar(ns, found.location - 1))
     }
 
     /// Plan converting the last word (letters + word-internal chars) at or
@@ -106,7 +127,7 @@ enum WordReplacementPlanner {
         let (before, after) = context(around: correctedRange, in: newText, radius: contextRadius)
         return Plan(original: original, converted: converted,
                     replacedRange: wordRange, replacement: replacement,
-                    newText: newText as String, newCaret: newCaret,
+                    newText: newText as String, originalCaret: caret, newCaret: newCaret,
                     correctedRange: correctedRange, before: before, after: after)
     }
 

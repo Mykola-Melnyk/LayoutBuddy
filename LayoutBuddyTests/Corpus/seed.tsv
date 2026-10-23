@@ -1,0 +1,98 @@
+# Ukrainian typed on the Latin layout
+ghbdsn zr cghfdb	привіт як справи
+lzre. pf ljgjvjue	дякую за допомогу
+z pfhfp yt vj;e ujdjhbnb	я зараз не можу говорити
+lj,ht lfdfq pfdnhf	добре давай завтра
+lt nb pfhfp	де ти зараз
+crbym vtys afqk ,elm kfcrf	скинь мені файл будь ласка
+vj;tvj pecnhsnbcz j gznsq	можемо зустрітися о пятій
+z d;t ]le ljljve	я вже їду додому
+wt le;t wsrfdj	це дуже цікаво
+gjlbdbcm ,elm kfcrf wtq ljrevtyn	подивись будь ласка цей документ
+nht,f gthtdshbnb ot hfp	треба перевірити ще раз
+dct ghfw.' yjhvfkmyj	все працює нормально
+rjnhf ujlbyf	котра година
+vb j,ujdjhbkb wt yf pecnhsxs	ми обговорили це на зустрічі
+yflsikb vtys gjcbkfyyz	надішли мені посилання
+e vtyt dct lj,ht	у мене все добре
+pdbxfqyj vj;yf	звичайно можна
+z gjlevf. s yfgbie gspysit	я подумаю і напишу пізніше
+db,fx oj yt dslgjdsd jlhfpe	вибач що не відповів одразу
+pfdnhf ,elt ljo	завтра буде дощ
+[jhjib[ db[slyb[	хороших вихідних
+z k.,k. rfde p vjkjrjv	я люблю каву з молоком
+gthtukzym pvsyb d rjls	переглянь зміни в коді
+lfdfq phj,bvj wt hfpjv	давай зробимо це разом
+dsy crfpfd oj ghbqlt gspysit	він сказав що прийде пізніше
+yt pf,elm regbnb [ks,	не забудь купити хліб
+le;t lzre.	дуже дякую
+dct phjpevskj	все зрозуміло
+z yf hj,jns	я на роботі
+gjxtrfq [dbkbyre	почекай хвилинку
+# English typed on the Ukrainian layout
+руддщ рщц фку нщг	hello how are you
+ерфтлі ащк нщгк рудз	thanks for your help
+іуу нщг ещьщккщц	see you tomorrow
+здуфіу іутв ьу еру ашду	please send me the file
+Ш цшдд срусл ше дфеук	I will check it later
+еру игшдв ші икщлут фпфшт	the build is broken again
+дуе ьу лтщц црут нщг фку куфвн	let me know when you are ready
+сфт цу ьууе фе ашму	can we meet at five
+ерші дщщлі пкуфе	this looks great
+Ш ерштл цу ірщгдв ьукпу ше	I think we should merge it
+црфе ешьу ші еру ьууештп	what time is the meeting
+іщккн ащк еру дфеу куздн	sorry for the late reply
+еру еуіеі фку зфііштп тщц	the tests are passing now
+рфму ф тшсу цуулутв	have a nice weekend
+пщщв ьщктштп умукнщту	good morning everyone
+цу туув ещ гзвфеу еру вщсгьутефешщт	we need to update the documentation
+огіе ф йгшсл йгуіешщт	just a quick question
+цщклі ащк ьу	works for me
+ерфтл нщг іщ ьгср	thank you so much
+вуздщн ше фаеук дгтср	deploy it after lunch
+# Typed correctly: must be left alone
+привіт як справи	привіт як справи
+дякую, все зрозуміло!	дякую, все зрозуміло!
+я надіслав тобі файл учора	я надіслав тобі файл учора
+сьогодні гарна погода	сьогодні гарна погода
+нам треба поговорити про проєкт	нам треба поговорити про проєкт
+hello how are you	hello how are you
+thanks, see you tomorrow!	thanks, see you tomorrow!
+the build is green now	the build is green now
+please review my pull request	please review my pull request
+I'll be there in five minutes	I'll be there in five minutes
+don't worry, it's fine	don't worry, it's fine
+we're shipping on Monday	we're shipping on Monday
+# Mixed languages and things that only look like mistakes
+я запушив зміни в main	я запушив зміни в main
+відкрий PR і додай reviewer	відкрий PR і додай reviewer
+у нас падає CI на macOS	у нас падає CI на macOS
+скинь мені link на Figma	скинь мені link на Figma
+зустріч у Zoom о 15:00	зустріч у Zoom о 15:00
+напиши Mykola або Olena	напиши Mykola або Olena
+використовуй git rebase замість merge	використовуй git rebase замість merge
+it works on iPhone and iPad	it works on iPhone and iPad
+call getValue before setValue	call getValue before setValue
+ping me on Slack or Telegram	ping me on Slack or Telegram
+we use Kubernetes and Terraform	we use Kubernetes and Terraform
+the API returns JSON	the API returns JSON
+ask Taras about the Kyiv office	ask Taras about the Kyiv office
+# One word slipped into the wrong layout
+я pfdnhf буду	я завтра буду
+давай phj,bvj це	давай зробимо це
+перевір ,elm ласка	перевір будь ласка
+можеш yflsckfnb файл	можеш надіслати файл
+see you ещьщккщц	see you tomorrow
+let me срусл that	let me check that
+we should гзвфеу it	we should update it
+the ьууештп is at five	the meeting is at five
+# Short words
+z не знаю	я не знаю
+d нас все добре	в нас все добре
+s ще одне	і ще одне
+nfr звичайно	так звичайно
+ys дякую	ні дякую
+ф quick note	a quick note
+Ш am here	I am here
+щл thanks	ok thanks
+тщ problem	no problem
