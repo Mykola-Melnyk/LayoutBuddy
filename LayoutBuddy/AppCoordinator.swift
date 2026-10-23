@@ -156,8 +156,6 @@ final class AppCoordinator: NSObject {
         static let convertHotkey = 0.1
         /// Re-check delay when saving a tie candidate after a boundary.
         static let captureTie = 0.05
-        /// How long a pasted correction keeps the clipboard before restoring it.
-        static let pasteRestore = 0.25
     }
 
     private struct CorrectionUndo {
@@ -176,6 +174,16 @@ final class AppCoordinator: NSObject {
         var charsAfter: Int = 0
     }
     private var lastCorrectionUndo: CorrectionUndo?
+
+    /// Processes whose AX text writes reported success but didn't change the
+    /// text (Word, Chromium). Some apply them later, on top of our keystroke
+    /// fallback (Word ended up with "привіт  "), so for these apps we stop
+    /// writing via AX and go straight to keystrokes.
+    private var axWritesIgnored: Set<pid_t> = []
+
+    private func axWritable(_ el: AXUIElement) -> Bool {
+        !axWritesIgnored.contains(axPID(el))
+    }
 
     // MARK: - App lifecycle
 
@@ -685,9 +693,13 @@ final class AppCoordinator: NSObject {
         }
     }
 
-    // After each word boundary, everything on the stack moves one word “further back”
+    // After each word boundary, everything on the stack moves one word “further back”.
+    // Done synchronously (the tap runs on the main thread): deferring it raced
+    // with corrections that record their undo asynchronously, so the boundary
+    // ending the corrected word could be counted as a word typed after it —
+    // and undo then reverted an older occurrence of the same word.
     private func bumpWordsAhead() {
-        DispatchQueue.main.async {
+        let bump = {
             for i in self.ambiguityStack.indices {
                 self.ambiguityStack[i].wordsAhead += 1
             }
@@ -695,6 +707,7 @@ final class AppCoordinator: NSObject {
                 self.lastCorrectionUndo?.wordsAhead += 1
             }
         }
+        if Thread.isMainThread { bump() } else { DispatchQueue.main.async(execute: bump) }
     }
 
     // MARK: - Process a completed word
@@ -939,7 +952,7 @@ final class AppCoordinator: NSObject {
 
         // Fallback path without relying on Accessibility:
         // select the last word via Option navigation, copy it, convert, then replace selection.
-        DispatchQueue.main.async {
+        afterModifiersReleased {
             self.isSynthesizing = true
             self.optLeft()
             self.shiftOptRight()
@@ -952,16 +965,17 @@ final class AppCoordinator: NSObject {
                 clipboardSnapshot.restore(to: pb)
                 guard !original.isEmpty else { self.isSynthesizing = false; self.playSwitchSound(); return }
                 let converted = self.convert(original, from: curLangPrefix, to: targetLangPrefix)
-                // Replace the current selection
-                self.sendBackspace(times: 1)
-                self.pasteText(converted) {
+                // Type over the current selection (deleting it first lets
+                // Word's smart cut take the neighbouring space with it).
+                let targetID = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
+                self.ensureSwitch(to: targetID) {
+                    self.typeUnicode(converted)
                     self.rememberBlindUndo(original: original, corrected: converted, restoreLangPrefix: curLangPrefix)
                     // Restore caret position after trailing boundary (e.g., space)
                     self.optRight()
+                    self.menuBar.updateStatusTitleAndColor()
                     self.playSwitchSound()
                     self.isSynthesizing = false
-                    let targetID = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
-                    self.ensureSwitch(to: targetID) { self.menuBar.updateStatusTitleAndColor() }
                 }
             }
         }
@@ -1034,21 +1048,20 @@ final class AppCoordinator: NSObject {
                 // in the field: delete it with the word and retype it after.
                 self.sendBackspace(times: deleteCount + trailing.count)
 
-                // Re-insert the swallowed boundary along with the word.
+                let switchTo = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
+                // Re-type the swallowed boundary along with the word.
                 let boundaryText = boundary.map { String($0) } ?? ""
                 let typedBoundary = !boundaryText.isEmpty || keepFollowingBoundary
-                self.pasteText(newWord + trailing + boundaryText) {
+                self.ensureSwitch(to: switchTo) {
+                    self.typeUnicode(newWord + trailing + boundaryText)
                     // The boundary was already counted as a word by now, so no
                     // -1 here; the undo steps over the boundary and trailing
                     // punctuation that follow the word.
                     self.rememberBlindUndo(original: oldWord, corrected: newWord, restoreLangPrefix: restoreLangPrefix,
                                            charsAfter: trailing.count + (typedBoundary ? 1 : 0))
                     if keepFollowingBoundary { self.tapKey(.rightArrow) }
+                    self.menuBar.updateStatusTitleAndColor()
                     self.isSynthesizing = false
-                    // Pasted text doesn't depend on the layout; switch so the
-                    // user carries on typing in the corrected language.
-                    let switchTo = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
-                    self.ensureSwitch(to: switchTo) { self.menuBar.updateStatusTitleAndColor() }
                 }
             }
         }
@@ -1063,35 +1076,8 @@ final class AppCoordinator: NSObject {
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
         let vk = CGKeyCode(kVK_Delete)
         for _ in 0..<times {
-            postSynthetic(CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: true))
-            postSynthetic(CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: false))
-        }
-    }
-
-    /// Inserts `text` at the caret by pasting it, then puts the user's
-    /// clipboard back. Typing text as synthetic Unicode key events is not
-    /// reliable in Chromium apps (Chrome, Electron): the last character could
-    /// come out as a different letter ("привітn"). Pasting skips the
-    /// key-to-character translation entirely and doesn't depend on the layout.
-    private func pasteText(_ text: String, then done: @escaping () -> Void) {
-        if isRunningUnitTests { return done() }
-        #if DEBUG
-        if testSimulationMode { return done() }
-        #endif
-        let pb = NSPasteboard.general
-        let snapshot = PasteboardSnapshot(from: pb)
-        pb.clearContents()
-        pb.setString(text, forType: .string)
-        // Ask clipboard managers not to record this temporary entry.
-        pb.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
-        pb.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.AutoGeneratedType"))
-        let ours = pb.changeCount
-        tapKeyWithFlags(CGKeyCode(kVK_ANSI_V), flags: .maskCommand)
-        dlog("[PASTE] \(text.debugDescription)")
-        // Give the app time to read the clipboard before restoring it.
-        DispatchQueue.main.asyncAfter(deadline: .now() + Timing.pasteRestore) {
-            if pb.changeCount == ours { snapshot.restore(to: pb) }
-            done()
+            postSynthetic(withoutModifiers(CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: true)))
+            postSynthetic(withoutModifiers(CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: false)))
         }
     }
 
@@ -1103,10 +1089,10 @@ final class AppCoordinator: NSObject {
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
         for scalar in text.unicodeScalars {
             var u = UniChar(scalar.value)
-            let down = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true)
+            let down = withoutModifiers(CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true))
             down?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &u)
             postSynthetic(down)
-            let up = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false)
+            let up = withoutModifiers(CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false))
             up?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &u)
             postSynthetic(up)
         }
@@ -1119,8 +1105,8 @@ final class AppCoordinator: NSObject {
         #endif
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
         let code: CGKeyCode = (key == .leftArrow) ? CGKeyCode(kVK_LeftArrow) : CGKeyCode(kVK_RightArrow)
-        postSynthetic(CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: true))
-        postSynthetic(CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: false))
+        postSynthetic(withoutModifiers(CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: true)))
+        postSynthetic(withoutModifiers(CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: false)))
     }
 
     private func tapKeyWithFlags(_ key: CGKeyCode, flags: CGEventFlags) {
@@ -1135,6 +1121,26 @@ final class AppCoordinator: NSObject {
         let up = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: false)
         up?.flags = flags
         postSynthetic(up)
+    }
+
+    /// Events from the HID-state source inherit whatever modifiers are held
+    /// right now — usually the hotkey's ⌃⌥⌘ — and apps then read our
+    /// Backspace and letters as shortcuts. Plain keys get no modifiers.
+    private func withoutModifiers(_ event: CGEvent?) -> CGEvent? {
+        event?.flags = []
+        return event
+    }
+
+    /// Runs `work` once the user lets go of the hotkey's modifiers (or after
+    /// ~1.5 s). Some apps check the live modifier state rather than the event's
+    /// own flags, so keystroke edits wait until no modifier is held.
+    private func afterModifiersReleased(_ work: @escaping () -> Void, attempts: Int = 75) {
+        let held = CGEventSource.flagsState(.hidSystemState)
+            .intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift])
+        if held.isEmpty || attempts == 0 { return work() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+            self.afterModifiersReleased(work, attempts: attempts - 1)
+        }
     }
 
     private func markSynthetic(_ event: CGEvent?) -> CGEvent? {
@@ -1153,7 +1159,6 @@ final class AppCoordinator: NSObject {
     private func optLeft()       { tapKeyWithFlags(CGKeyCode(kVK_LeftArrow),  flags: .maskAlternate) }
     private func optRight()      { tapKeyWithFlags(CGKeyCode(kVK_RightArrow), flags: .maskAlternate) }
     private func shiftOptRight() { tapKeyWithFlags(CGKeyCode(kVK_RightArrow), flags: [.maskAlternate, .maskShift]) }
-    private func shiftLeft()     { tapKeyWithFlags(CGKeyCode(kVK_LeftArrow),  flags: .maskShift) }
 
     // Ensure layout really switched before typing
     // Bumped on every ensureSwitch so a newer switch supersedes older retry
@@ -1374,6 +1379,9 @@ final class AppCoordinator: NSObject {
         // the word — but never apply the text change, yet still report success.
         // Confirm the value actually changed before trusting it.
         let confirmed = wrote && target.text == plan.newText
+        if wrote, !confirmed, let el = target.axElement, axWritesIgnored.insert(axPID(el)).inserted {
+            dlog("[AX] writes not applied by pid \(axPID(el)); using keystrokes there from now on")
+        }
         guard confirmed else {
             // The word may be left selected; put the caret back exactly where
             // it was, which is where the caller's keystroke fallback expects it.
@@ -1440,7 +1448,7 @@ final class AppCoordinator: NSObject {
                                           with converted: String,
                                           restoreLangPrefix: String,
                                           boundaryToInsert: UnicodeScalar?) -> Bool {
-        guard let el = axFocusedElement() else { return false }
+        guard let el = axFocusedElement(), axWritable(el) else { return false }
         return replaceWord(on: AXTextTarget(element: el),
                            original: original, converted: converted,
                            boundaryToInsert: boundaryToInsert,
@@ -1448,7 +1456,7 @@ final class AppCoordinator: NSObject {
     }
 
     private func axCorrectLastWordInDocument(curLangPrefix: String, targetLangPrefix: String) -> Bool {
-        guard let el = axFocusedElement() else { return false }
+        guard let el = axFocusedElement(), axWritable(el) else { return false }
         return correctLastWord(on: AXTextTarget(element: el),
                                convert: { self.convert($0, from: curLangPrefix, to: targetLangPrefix) },
                                restoreLangPrefix: curLangPrefix)
@@ -1574,7 +1582,7 @@ final class AppCoordinator: NSObject {
         }
 
         // Try AX path
-        if let el = cand.element, axPID(el) == cand.pid,
+        if let el = cand.element, axPID(el) == cand.pid, axWritable(el),
            let caretBefore = axSelectedRange(el),
            let full = axStringValue(el) {
 
@@ -1633,7 +1641,7 @@ final class AppCoordinator: NSObject {
     /// punctuation-leading correction like ",fu" is removed whole, not split
     /// into ",баг". Cleanly collapses the selection afterwards.
     private func axUndoByText(_ undo: CorrectionUndo) -> Bool {
-        guard let el = axFocusedElement(),
+        guard let el = axFocusedElement(), axWritable(el),
               let caret = axSelectedRange(el), caret.length == 0,
               let full = axStringValue(el) else { return false }
         // Stay in the field the correction happened in, when we know it.
@@ -1675,7 +1683,7 @@ final class AppCoordinator: NSObject {
     }
 
     private func applyAXUndo(_ undo: CorrectionUndo) -> Bool {
-        guard let el = undo.element, axPID(el) == undo.pid,
+        guard let el = undo.element, axPID(el) == undo.pid, axWritable(el),
               let caretBefore = axSelectedRange(el),
               let full = axStringValue(el),
               let cr = undo.range else {
@@ -1764,7 +1772,7 @@ final class AppCoordinator: NSObject {
             return
         }
         #endif
-        DispatchQueue.main.asyncAfter(deadline: .now() + Timing.navReplace) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + Timing.navReplace) { self.afterModifiersReleased {
             let curID = self.layoutManager.currentInputSourceID()
             let targetID = self.layoutID(forLanguagePrefix: cand.targetLangPrefix) ?? self.otherLayoutID()
             self.dlog("[NAVREP] start synth=\(self.isSynthesizing) curID=\(curID) targetID=\(targetID) buffer=\(self.wordParser.buffer)")
@@ -1778,17 +1786,23 @@ final class AppCoordinator: NSObject {
             let stepsLeft = max(1, cand.wordsAhead + 1)
 
             if exactSelect {
-                // Step back over the boundary typed after the word, then select it.
+                // Step back over the boundary typed after the word, then erase
+                // it a character at a time. Deleting a *selection* instead lets
+                // Word's smart cut take the neighbouring space too, and Pages
+                // mangled text typed over a selection ("ok hbdsn").
                 for _ in 0..<cand.charsAfter { self.tapKey(.leftArrow) }
-                for _ in 0..<cand.original.count { self.shiftLeft() }
+                self.sendBackspace(times: cand.original.count)
             } else {
+                // Type straight over the selected word (see above for why it
+                // isn't deleted first).
                 for _ in 0..<stepsLeft { self.optLeft() }
                 self.shiftOptRight()
             }
-            self.sendBackspace(times: 1)
 
-            self.pasteText(cand.converted) {
-                self.dlog("[NAVREP] pasted \(cand.converted)")
+            // Switch to target layout and type converted word
+            self.ensureSwitch(to: targetID) {
+                self.dlog("[NAVREP] typing \(cand.converted) on targetID=\(targetID)")
+                self.typeUnicode(cand.converted)
                 if recordUndo {
                     self.rememberBlindUndo(
                         original: cand.original,
@@ -1803,11 +1817,11 @@ final class AppCoordinator: NSObject {
                 } else {
                     for _ in 0..<stepsLeft { self.optRight() }
                 }
+                self.menuBar.updateStatusTitleAndColor()
                 self.playSwitchSound()
                 self.isSynthesizing = false
-                self.ensureSwitch(to: targetID) { self.menuBar.updateStatusTitleAndColor() }
             }
-        }
+        } }
     }
     // MARK: - Testing helpers
     /// Expose the internal word buffer for unit tests.
