@@ -245,6 +245,19 @@ final class LayoutBuddyTests: XCTestCase {
         XCTAssertEqual(target.selection, NSRange(location: 6, length: 0))
     }
 
+    // Bug: Telegram applies the AX edit but reports a failure; trusting the
+    // error made the keystroke fallback correct the word a second time.
+    func testAXEditThatReportsFailureButAppliesCountsAsDone() {
+        let app = makeApp()
+        let target = FakeTextTarget("ok ghbdsn", caret: 9)
+        target.applyButReportFailure = true
+
+        XCTAssertTrue(app.replaceWord(on: target, original: "ghbdsn", converted: "привіт",
+                                      boundaryToInsert: " ", restoreLangPrefix: "en"))
+        XCTAssertEqual(target.text, "ok привіт ")
+        XCTAssertEqual(target.selection, NSRange(location: 10, length: 0))
+    }
+
     // Bug: the boundary was already in the field ("ghbdsn |"). A failed AX edit
     // left the caret before the space, so the fallback's step back over the
     // space landed before "n" and the result was "привітn".
@@ -674,6 +687,7 @@ final class FakeTextTarget: TextTarget {
     private var caret: NSRange
     var failWrite = false
     var lieOnReplace = false   // mimic an AX shim that reports success but doesn't apply the edit
+    var applyButReportFailure = false   // mimic Telegram: applies the edit, returns an error
     private(set) var writeCount = 0
     private(set) var selectCount = 0
 
@@ -701,6 +715,13 @@ final class FakeTextTarget: TextTarget {
     func replace(_ range: NSRange, with text: String) -> Bool {
         guard !failWrite else { return false }
         if lieOnReplace { caret = range; return true }   // word selected, success reported, text unchanged
+        if applyButReportFailure {
+            let mutable = content.mutableCopy() as! NSMutableString
+            mutable.replaceCharacters(in: range, with: text)
+            content = mutable
+            caret = NSRange(location: range.location + (text as NSString).length, length: 0)
+            return false
+        }
         let mutable = content.mutableCopy() as! NSMutableString
         mutable.replaceCharacters(in: range, with: text)
         content = mutable

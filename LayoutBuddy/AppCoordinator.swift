@@ -59,14 +59,22 @@ final class AppCoordinator: NSObject {
     private let eventTapController = EventTapController()
     private let syntheticEventUserData: Int64 = 0x4C42_5359_4E54 // "LBSYNT"
     private var isSynthesizing = false {
-        didSet { if !isSynthesizing { flushQueuedEvents() } }
+        didSet { if !isSynthesizing { pumpQueuedKeys() } }
     }
-    /// A key held back while we synthesize. Its text is read when it arrives:
-    /// a copy of a hardware key event read later can report the wrong character.
+    /// Tags held keys we post back, so they are buffered like typing but
+    /// recognised as ours when they return through the tap.
+    private let replayEventUserData: Int64 = 0x4C42_5250_4C59 // "LBRPLY"
+    /// A held key has been posted back and hasn't come through the tap yet.
+    private var replayInFlight = false
+    private var replayGeneration = 0
+    /// A key held back while we synthesize. Hardware keys are replayed by key
+    /// code, so they come out in the layout we switched to (a "z" pressed
+    /// mid-correction becomes "я" like the keys after it). Keys other apps
+    /// synthesized carry their own text, read when they arrive.
     private struct QueuedKey {
         let keyCode: CGKeyCode
         let flags: CGEventFlags
-        let text: [UniChar]
+        let text: [UniChar]?
     }
     private var queuedEvents: [QueuedKey] = []
     private let queuedEventsLock = NSLock()
@@ -156,6 +164,8 @@ final class AppCoordinator: NSObject {
         static let convertHotkey = 0.1
         /// Re-check delay when saving a tie candidate after a boundary.
         static let captureTie = 0.05
+        /// Gap after each synthetic key event, in microseconds.
+        static let syntheticKeyGap: useconds_t = 5_000
     }
 
     private struct CorrectionUndo {
@@ -431,47 +441,72 @@ final class AppCoordinator: NSObject {
         }
     }
 
-    private func enqueueQueuedEvent(_ event: CGEvent) {
-        var length = 0
-        event.keyboardGetUnicodeString(maxStringLength: 0, actualStringLength: &length, unicodeString: nil)
-        var text = [UniChar](repeating: 0, count: length)
-        if length > 0 {
-            event.keyboardGetUnicodeString(maxStringLength: length, actualStringLength: &length, unicodeString: &text)
+    private var hasQueuedKeys: Bool {
+        queuedEventsLock.lock(); defer { queuedEventsLock.unlock() }
+        return !queuedEvents.isEmpty
+    }
+
+    private func enqueueQueuedEvent(_ event: CGEvent, atFront: Bool = false) {
+        var text: [UniChar]? = nil
+        let fromHardware = event.getIntegerValueField(.eventSourceStateID) == Int64(CGEventSourceStateID.hidSystemState.rawValue)
+        if !fromHardware {
+            var length = 0
+            event.keyboardGetUnicodeString(maxStringLength: 0, actualStringLength: &length, unicodeString: nil)
+            var chars = [UniChar](repeating: 0, count: length)
+            if length > 0 {
+                event.keyboardGetUnicodeString(maxStringLength: length, actualStringLength: &length, unicodeString: &chars)
+            }
+            text = chars
         }
         let key = QueuedKey(keyCode: CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode)),
                             flags: event.flags, text: text)
-        dlog("[QUEUE] held keyCode=\(key.keyCode) text=\(String(utf16CodeUnits: text, count: text.count).debugDescription)")
+        dlog("[QUEUE] held keyCode=\(key.keyCode) text=\(text.map { String(utf16CodeUnits: $0, count: $0.count).debugDescription } ?? "by layout")")
         queuedEventsLock.lock()
-        queuedEvents.append(key)
+        if atFront { queuedEvents.insert(key, at: 0) } else { queuedEvents.append(key) }
         queuedEventsLock.unlock()
     }
 
-    private func flushQueuedEvents() {
-        queuedEventsLock.lock()
-        let events = queuedEvents
-        queuedEvents.removeAll()
-        queuedEventsLock.unlock()
-
+    /// Posts the oldest held key back through the HID tap — it then passes
+    /// our own tap and is buffered like normal typing — unless we're still
+    /// synthesizing or an earlier held key hasn't come back yet.
+    private func pumpQueuedKeys() {
         // In tests, just drop queued events without posting to the system.
-        if isRunningUnitTests { return }
-        #if DEBUG
-        if testSimulationMode { return }
-        #endif
-
-        // Replay at the HID level so the keys pass through our own tap again
-        // and get buffered like normal typing. Posting below the tap (as this
-        // used to) hid them from us: words typed during a correction were never
-        // checked, or were checked with their first letters missing.
-        if !events.isEmpty { dlog("[QUEUE] replaying \(events.count) held key(s)") }
-        for key in events {
-            for keyDown in [true, false] {
-                guard let e = CGEvent(keyboardEventSource: nil, virtualKey: key.keyCode, keyDown: keyDown) else { continue }
-                e.flags = key.flags
-                var text = key.text
-                if !text.isEmpty { e.keyboardSetUnicodeString(stringLength: text.count, unicodeString: &text) }
-                e.post(tap: .cghidEventTap)
-            }
+        if isRunningUnitTests || testSimulationMode {
+            queuedEventsLock.lock(); queuedEvents.removeAll(); queuedEventsLock.unlock()
+            return
         }
+        guard !isSynthesizing, !replayInFlight else { return }
+        queuedEventsLock.lock()
+        let key = queuedEvents.isEmpty ? nil : queuedEvents.removeFirst()
+        queuedEventsLock.unlock()
+        guard let key else { return }
+
+        dlog("[QUEUE] replaying keyCode=\(key.keyCode)")
+        replayInFlight = true
+        replayGeneration += 1
+        let generation = replayGeneration
+        // Never let a key that doesn't come back (tap paused, say) block the
+        // keyboard: give up waiting for it after half a second.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            guard self.replayInFlight, generation == self.replayGeneration else { return }
+            self.dlog("[QUEUE] replayed key didn't come back; continuing")
+            self.replayInFlight = false
+            self.pumpQueuedKeys()
+        }
+        let source = CGEventSource(stateID: .hidSystemState)
+        for keyDown in [true, false] {
+            guard let e = CGEvent(keyboardEventSource: source, virtualKey: key.keyCode, keyDown: keyDown) else { continue }
+            e.flags = key.flags
+            if var text = key.text, !text.isEmpty {
+                e.keyboardSetUnicodeString(stringLength: text.count, unicodeString: &text)
+            }
+            e.setIntegerValueField(.eventSourceUserData, value: replayEventUserData)
+            e.post(tap: .cghidEventTap)
+        }
+    }
+
+    private func isReplayedEvent(_ event: CGEvent) -> Bool {
+        event.getIntegerValueField(.eventSourceUserData) == replayEventUserData
     }
 
     // MARK: - Key handling
@@ -488,10 +523,20 @@ final class AppCoordinator: NSObject {
             return Unmanaged.passUnretained(event)
         }
 
-        if isSynthesizing {
+        // Held keys go back out one at a time, oldest first, and newer keys
+        // wait behind them, so nothing overtakes a key pressed earlier.
+        let replayed = isReplayedEvent(event)
+        if replayed {
+            replayInFlight = false
+            if isSynthesizing {
+                enqueueQueuedEvent(event, atFront: true)
+                return nil
+            }
+        } else if isSynthesizing || replayInFlight || hasQueuedKeys {
             enqueueQueuedEvent(event)
             return nil
         }
+        defer { if replayed { pumpQueuedKeys() } }
         guard event.type == .keyDown else { return Unmanaged.passUnretained(event) }
 
         let nsFlags = NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue))
@@ -1149,7 +1194,11 @@ final class AppCoordinator: NSObject {
     }
 
     private func postSynthetic(_ event: CGEvent?) {
-        markSynthetic(event)?.post(tap: .cgAnnotatedSessionEventTap)
+        guard let event = markSynthetic(event) else { return }
+        event.post(tap: .cgAnnotatedSessionEventTap)
+        // Some apps drop key events that arrive in a burst: Telegram lost
+        // whole words and spaces with no gap, and was clean from ~5 ms.
+        usleep(Timing.syntheticKeyGap)
     }
 
     private func isSyntheticEvent(_ event: CGEvent) -> Bool {
@@ -1375,12 +1424,9 @@ final class AppCoordinator: NSObject {
         // Replace just the word's range (not the whole field) so the app doesn't
         // yank the caret to the start.
         let wrote = target.replace(plan.replacedRange, with: plan.replacement)
-        // Some fields (web / Electron AX shims) accept the AX calls — selecting
-        // the word — but never apply the text change, yet still report success.
-        // Confirm the value actually changed before trusting it.
-        let confirmed = wrote && target.text == plan.newText
-        if wrote, !confirmed, let el = target.axElement, axWritesIgnored.insert(axPID(el)).inserted {
-            dlog("[AX] writes not applied by pid \(axPID(el)); using keystrokes there from now on")
+        let confirmed = axEditTook { target.text == plan.newText }
+        if !confirmed, let el = target.axElement, axWritesIgnored.insert(axPID(el)).inserted {
+            dlog("[AX] writes not applied by pid \(axPID(el)) (reported \(wrote ? "success" : "failure")); using keystrokes there from now on")
         }
         guard confirmed else {
             // The word may be left selected; put the caret back exactly where
@@ -1440,6 +1486,18 @@ final class AppCoordinator: NSObject {
             fullText: text as NSString, caret: sel.location,
             convert: convert, contextRadius: contextRadius)
         return apply(plan, on: target, restoreLangPrefix: restoreLangPrefix)
+    }
+
+    /// Whether an AX edit actually changed the text, judged by reading it back.
+    /// The setter's result can't be trusted either way: web/Electron shims
+    /// report success without applying the edit, while Telegram applies it
+    /// and reports a failure — and treating that as failed made the keystroke
+    /// fallback correct the word a second time. Some apps apply it a moment
+    /// later, so look once more after a short pause.
+    private func axEditTook(_ applied: () -> Bool) -> Bool {
+        if applied() { return true }
+        usleep(30_000)
+        return applied()
     }
 
     // AX entry points: resolve the focused element, then run the shared seam.
@@ -1600,11 +1658,10 @@ final class AppCoordinator: NSObject {
                 let convertedLen = (cand.converted as NSString).length
                 let newCaret = adjustedCaret(caretBefore.location, afterReplacing: finalRange, withLength: convertedLen)
                 isSynthesizing = true
-                let wrote = AXTextTarget(element: el).replace(finalRange, with: cand.converted)
-                // Confirm the field actually changed; some AX shims report
-                // success but leave the word merely selected.
-                let confirmed = wrote &&
-                    axStringForRange(el, CFRange(location: finalRange.location, length: convertedLen)) == cand.converted
+                _ = AXTextTarget(element: el).replace(finalRange, with: cand.converted)
+                let confirmed = axEditTook {
+                    self.axStringForRange(el, CFRange(location: finalRange.location, length: convertedLen)) == cand.converted
+                }
                 if confirmed {
                     _ = axSetSelectedRange(el, NSRange(location: max(0, newCaret), length: 0))
                 }
@@ -1665,9 +1722,10 @@ final class AppCoordinator: NSObject {
 
         let originalLen = (undo.original as NSString).length
         isSynthesizing = true
-        let wrote = AXTextTarget(element: el).replace(range, with: undo.original)
-        let confirmed = wrote &&
-            axStringForRange(el, CFRange(location: range.location, length: originalLen)) == undo.original
+        _ = AXTextTarget(element: el).replace(range, with: undo.original)
+        let confirmed = axEditTook {
+            self.axStringForRange(el, CFRange(location: range.location, length: originalLen)) == undo.original
+        }
         if confirmed {
             let newCaret = adjustedCaret(caret.location, afterReplacing: range, withLength: originalLen)
             _ = axSetSelectedRange(el, NSRange(location: max(0, newCaret), length: 0))
@@ -1702,10 +1760,10 @@ final class AppCoordinator: NSObject {
         // which would yank the caret to the start of the field.
         let originalLen = (undo.original as NSString).length
         isSynthesizing = true
-        let wrote = AXTextTarget(element: el).replace(finalRange, with: undo.original)
-        // Confirm it took; some AX shims report success without applying the edit.
-        let confirmed = wrote &&
-            axStringForRange(el, CFRange(location: finalRange.location, length: originalLen)) == undo.original
+        _ = AXTextTarget(element: el).replace(finalRange, with: undo.original)
+        let confirmed = axEditTook {
+            self.axStringForRange(el, CFRange(location: finalRange.location, length: originalLen)) == undo.original
+        }
         if confirmed {
             let newCaret = adjustedCaret(caretBefore.location, afterReplacing: finalRange, withLength: originalLen)
             _ = axSetSelectedRange(el, NSRange(location: max(0, newCaret), length: 0))
