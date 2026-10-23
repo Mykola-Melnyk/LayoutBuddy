@@ -99,16 +99,16 @@ final class AppCoordinator: NSObject {
 
     // Captured document text during tests
     var testDocumentText: String = ""
-    #if DEBUG
-    private var testEditingInsideWordBeforeInput = false
-    #endif
 
     // Word tracking
     private var wordParser = WordParser()
     private var inEmail = false
+    /// True when we didn't see where the current word started (see
+    /// `loseTrackOfText`); cleared once we watch a boundary being typed.
+    private var textBeforeWordUnknown = false
 
-    // Spellchecker
-    private let spellDocTag: Int = NSSpellChecker.uniqueSpellDocumentTag()
+    // Wrong-layout detection (in-process; cheap enough for the event tap)
+    private let decider: LayoutDecider
 
     // Ambiguity “fix later” stack
     private struct AmbiguousCandidate {
@@ -169,6 +169,9 @@ final class AppCoordinator: NSObject {
          userDictionary: UserDictionary = UserDictionary()) {
         self.preferences = preferences
         self.userDictionary = userDictionary
+        self.decider = LayoutDecider(isUserWord: { [userDictionary] word, script in
+            userDictionary.contains(word, languagePrefix: script.languagePrefix)
+        })
         self.layoutManager = KeyboardLayoutManager(preferences: preferences)
         self.menuBar = MenuBarController(layoutManager: layoutManager, preferences: preferences)
         super.init()
@@ -231,6 +234,12 @@ final class AppCoordinator: NSObject {
         if !eventTapController.start() {
             dlog("[EVENT TAP] failed to start; check Input Monitoring and Accessibility permissions")
         }
+        // We start mid-session: the caret may already sit inside a word.
+        textBeforeWordUnknown = true
+        // Switching apps moves focus to a field whose text we haven't seen.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.loseTrackOfText() }
         // Right-click → Services → "Add to LayoutBuddy: …" on selected text.
         NSApp.servicesProvider = self
         NSUpdateDynamicServices()
@@ -413,6 +422,13 @@ final class AppCoordinator: NSObject {
             return Unmanaged.passUnretained(event)
         }
 
+        // A click can put the caret anywhere, or in another field entirely —
+        // except a click on our own menu, whose actions need the pending state.
+        if isMouseDown(event.type) {
+            if !isClickOnOwnWindow(event) { loseTrackOfText() }
+            return Unmanaged.passUnretained(event)
+        }
+
         if isSynthesizing {
             if let copy = event.copy() { enqueueQueuedEvent(copy) }
             return nil
@@ -466,23 +482,31 @@ final class AppCoordinator: NSObject {
         }
 
         if isCaretNavigationKey(keyCode) {
-            resetTypingStateAfterCaretMove()
+            loseTrackOfText()
             return Unmanaged.passUnretained(event)
         }
 
-        // Ignore plain Option combos to avoid interfering with system shortcuts
-        if hasAlt && !hasCmd && !hasCtrl { return Unmanaged.passUnretained(event) }
+        // Any ⌘/⌃/⌥ combo can change the text in ways we never see — paste,
+        // undo, ⌥⌫ delete-word, ⌥-accented letters — so stop trusting the buffer.
+        if hasCmd || hasCtrl || hasAlt {
+            loseTrackOfText()
+            return Unmanaged.passUnretained(event)
+        }
 
         if !conversionOn { return Unmanaged.passUnretained(event) }
 
-        // Ignore other Cmd/Ctrl shortcuts
-        if hasCmd || hasCtrl { return Unmanaged.passUnretained(event) }
+        if keyCode == CGKeyCode(kVK_ForwardDelete) {
+            loseTrackOfText()
+            return Unmanaged.passUnretained(event)
+        }
 
-        // Backspace/delete edits the current word buffer without triggering processing
-        if keyCode == CGKeyCode(kVK_Delete) || keyCode == CGKeyCode(kVK_ForwardDelete) {
-            if hasAlt || keyCode == CGKeyCode(kVK_ForwardDelete) || isEditingInsideWordBeforeInput() {
-                resetTypingStateAfterCaretMove()
-            } else if !wordParser.buffer.isEmpty {
+        // Backspace edits the current word buffer without triggering processing
+        if keyCode == CGKeyCode(kVK_Delete) {
+            if wordParser.buffer.isEmpty {
+                // Deleting into text we didn't watch being typed: the next
+                // letters may extend a word whose start we never saw.
+                loseTrackOfText()
+            } else {
                 wordParser.removeLast()
             }
             return Unmanaged.passUnretained(event)
@@ -494,15 +518,10 @@ final class AppCoordinator: NSObject {
 
         dlog("[KEY] decoded scalar=\(scalar) buffer=\(wordParser.buffer)")
 
-        if !wordParser.buffer.isEmpty, isEditingInsideWordBeforeInput() {
-            dlog("[KEY] editing-inside-word reset; dropped buffer=\(wordParser.buffer) scalar=\(scalar)")
-            resetTypingStateAfterCaretMove()
-            return Unmanaged.passUnretained(event)
-        }
-
         if inEmail {
             if CharacterSet.whitespacesAndNewlines.contains(scalar) {
                 inEmail = false
+                textBeforeWordUnknown = false
                 bumpWordsAhead()
             }
             return Unmanaged.passUnretained(event)
@@ -544,6 +563,8 @@ final class AppCoordinator: NSObject {
             dlog("[KEY] boundary before process buffer=\(wordParser.buffer) scalar=\(scalar)")
             let replaced = processBufferedWordIfNeeded(keepFollowingBoundary: specialBoundary, boundaryEvent: eventCopy)
             dlog("[KEY] boundary after process buffer=\(wordParser.buffer)")
+            // We watched this boundary land, so the next word's start is known.
+            textBeforeWordUnknown = false
             bumpWordsAhead()
 
             if specialBoundary {
@@ -557,8 +578,22 @@ final class AppCoordinator: NSObject {
         }
 
         wordParser.clear()
+        textBeforeWordUnknown = false
         bumpWordsAhead()
         return Unmanaged.passUnretained(event)
+    }
+
+    private func isMouseDown(_ type: CGEventType) -> Bool {
+        type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown
+    }
+
+    /// True for clicks on LayoutBuddy's own status item, menu or windows.
+    private func isClickOnOwnWindow(_ event: CGEvent) -> Bool {
+        let number = event.getIntegerValueField(.mouseEventWindowUnderMousePointer)
+        guard number > 0,
+              let info = CGWindowListCopyWindowInfo(.optionIncludingWindow, CGWindowID(number)) as? [[String: Any]],
+              let pid = info.first?[kCGWindowOwnerPID as String] as? pid_t else { return false }
+        return pid == ProcessInfo.processInfo.processIdentifier
     }
 
     private func isCaretNavigationKey(_ keyCode: CGKeyCode) -> Bool {
@@ -571,31 +606,20 @@ final class AppCoordinator: NSObject {
         }
     }
 
-    private func resetTypingStateAfterCaretMove() {
+    /// Called whenever the text around the caret may have changed without us
+    /// seeing it (click, caret keys, shortcuts, app switch…). Drops the buffer
+    /// and anything that relies on blind keystroke navigation, and holds off
+    /// converting until we've watched a boundary being typed — so a fragment of
+    /// an existing word is never "corrected". This replaces asking the focused
+    /// app over Accessibility on every keystroke, which stalled the event tap.
+    private func loseTrackOfText() {
         wordParser.clear()
         inEmail = false
+        textBeforeWordUnknown = true
         ambiguityStack.removeAll { $0.keystrokeOnly }
         if lastCorrectionUndo?.keystrokeOnly == true {
             lastCorrectionUndo = nil
         }
-    }
-
-    private func isEditingInsideWordBeforeInput() -> Bool {
-        #if DEBUG
-        if testSimulationMode { return testEditingInsideWordBeforeInput }
-        #endif
-
-        guard let el = axFocusedElement(),
-              let caret = axSelectedRange(el) else {
-            return false
-        }
-
-        if caret.length > 0 { return true }
-        guard caret.location >= 0 else { return false }
-
-        let nextRange = CFRange(location: caret.location, length: 1)
-        guard let next = axStringForRange(el, nextRange) else { return false }
-        return next.unicodeScalars.contains { lbLetters.contains($0) }
     }
 
     // After each word boundary, everything on the stack moves one word “further back”
@@ -610,34 +634,20 @@ final class AppCoordinator: NSObject {
         }
     }
 
-    // MARK: - Spellcheck
-
-    private func bestSpellLang(for prefix: String) -> String? {
-        NSSpellChecker.shared.availableLanguages.first { $0.hasPrefix(prefix) }
-    }
-
-    private func isSpelledCorrect(_ word: String, language: String) -> Bool {
-        let miss = NSSpellChecker.shared.checkSpelling(
-            of: word, startingAt: 0, language: language, wrap: false,
-            inSpellDocumentWithTag: spellDocTag, wordCount: nil
-        )
-        return miss.location == NSNotFound
-    }
-
-    /// Whether `word` counts as a valid word of `langPrefix` ("en"/"uk") — the
-    /// user's custom dictionary first, then the system spell-checker.
-    private func isValidWord(_ word: String, langPrefix: String, spellLanguage: String) -> Bool {
-        userDictionary.contains(word, languagePrefix: langPrefix)
-            || isSpelledCorrect(word, language: spellLanguage)
-    }
-
     // MARK: - Process a completed word
 
     private func processBufferedWordIfNeeded(keepFollowingBoundary: Bool = false, boundaryEvent: CGEvent? = nil) -> Bool {
         guard !wordParser.buffer.isEmpty else { return false }
         dlog("[PROC] entry buffer=\(wordParser.buffer)")
+        defer { wordParser.clear() }
 
-        let curID = layoutManager.currentInputSourceID()
+        // The buffer may be the tail of a longer word we didn't see typed.
+        if textBeforeWordUnknown {
+            dlog("[PROC] skip: word start unknown")
+            textBeforeWordUnknown = false
+            return false
+        }
+
         // Decide the source language from what was actually TYPED (the buffer's
         // script), NOT the live keyboard layout. The layout can drift between
         // typing the word and hitting the boundary — and especially right after
@@ -647,80 +657,27 @@ final class AppCoordinator: NSObject {
         let firstLetter = wordParser.buffer.unicodeScalars.first {
             wordParser.isLatinLetter($0) || wordParser.isCyrillicLetter($0)
         }
-        let curLangPrefix = (firstLetter.map { wordParser.isCyrillicLetter($0) } ?? false) ? "uk" : "en"
-        let otherLangPrefix = (curLangPrefix == "en") ? "uk" : "en"
+        let source: KeyboardLayoutConverter.Script =
+            (firstLetter.map { wordParser.isCyrillicLetter($0) } ?? false) ? .cyrillic : .latin
+        let curLangPrefix = source.languagePrefix
+        let otherLangPrefix = oppositeLanguagePrefix(curLangPrefix)
 
-        let (core, _) = wordParser.splitTrailingMapped(wordParser.buffer)
-        let suspiciousEN = (curLangPrefix == "en") && wordParser.containsSuspiciousMapped(core)
+        let (core, trailing, decision) = decider.decide(token: wordParser.buffer, typedIn: source)
+        dlog("[PROC] decision core=\(core) source=\(curLangPrefix) → \(decision)")
 
-        guard let curSpell = bestSpellLang(for: curLangPrefix),
-              let otherSpell = bestSpellLang(for: otherLangPrefix) else {
-            dlog("[PROC] reset buffer")
-            wordParser.clear(); return false
-        }
-
-        // Single-letter policy
-        if core.count == 1 {
-            let curOK = isValidWord(core, langPrefix: curLangPrefix, spellLanguage: curSpell)
-            let converted1 = convert(core, from: curLangPrefix, to: otherLangPrefix)
-            dlog("[PROC] converted=\(converted1)")
-            // If nothing mapped, the "other language" form is identical — there
-            // is no real alternative to consider.
-            let otherOK = converted1 != core && !converted1.isEmpty && isValidWord(converted1, langPrefix: otherLangPrefix, spellLanguage: otherSpell)
-
-            if curOK && otherOK {
-                captureAmbiguityLater(original: core, converted: converted1, targetLangPrefix: otherLangPrefix)
-                dlog("[PROC] reset buffer")
-                wordParser.clear(); return false
-            } else if !curOK && otherOK {
-                replaceLastWord(original: core, with: converted1, restoreLangPrefix: curLangPrefix, targetLangPrefix: otherLangPrefix,
-                                keepFollowingBoundary: keepFollowingBoundary, boundaryEvent: boundaryEvent, deleteCountOverride: core.count)
-                playSwitchSound(); menuBar.updateStatusTitleAndColor()
-                dlog("[PROC] reset buffer")
-                wordParser.clear(); return true
-            } else {
-                dlog("[PROC] reset buffer")
-                wordParser.clear(); return false
-            }
-        }
-
-        let curOK = !suspiciousEN && isValidWord(core, langPrefix: curLangPrefix, spellLanguage: curSpell)
-        let convertedCore = convert(core, from: curLangPrefix, to: otherLangPrefix)
-        // If nothing mapped, the "other language" form is identical — skip it.
-        let otherOK = convertedCore != core && !convertedCore.isEmpty && isValidWord(convertedCore, langPrefix: otherLangPrefix, spellLanguage: otherSpell)
-        dlog("[PROC] decision curID=\(curID) curLang=\(curLangPrefix) core=\(core) converted=\(convertedCore) curOK=\(curOK) otherOK=\(otherOK)")
-
-        // Tie: both valid → save candidate, no auto-change
-        if curOK && otherOK {
-            captureAmbiguityLater(original: core, converted: convertedCore, targetLangPrefix: otherLangPrefix)
-            dlog("[PROC] reset buffer")
-            wordParser.clear(); return false
-        }
-
-        // Keep if current is valid
-        if curOK && !otherOK { dlog("[PROC] reset buffer"); wordParser.clear(); return false }
-
-        var shouldReplace = otherOK
-        // Fallback: ABC-typed but looks Ukrainian after mapping
-        if !shouldReplace, curLangPrefix == "en", wordParser.containsSuspiciousMapped(core), isAllCyrillic(convertedCore) {
-            shouldReplace = true
-        }
-
-        if shouldReplace {
-            replaceLastWord(original: core, with: convertedCore, restoreLangPrefix: curLangPrefix, targetLangPrefix: otherLangPrefix,
-                            keepFollowingBoundary: keepFollowingBoundary, boundaryEvent: boundaryEvent, deleteCountOverride: core.count)
+        switch decision {
+        case .keep:
+            return false
+        case .ambiguous(let converted):
+            captureAmbiguityLater(original: core, converted: converted, targetLangPrefix: otherLangPrefix)
+            return false
+        case .convert(let converted):
+            replaceLastWord(original: core, with: converted, restoreLangPrefix: curLangPrefix, targetLangPrefix: otherLangPrefix,
+                            keepFollowingBoundary: keepFollowingBoundary, boundaryEvent: boundaryEvent,
+                            deleteCountOverride: core.count, trailing: trailing)
             playSwitchSound(); menuBar.updateStatusTitleAndColor()
-            dlog("[PROC] reset buffer")
-            wordParser.clear()
             return true
         }
-        dlog("[PROC] reset buffer")
-        wordParser.clear()
-        return false
-    }
-
-    private func isAllCyrillic(_ s: String) -> Bool {
-        s.unicodeScalars.allSatisfy { wordParser.isCyrillicLetter($0) }
     }
 
     private func oppositeLanguagePrefix(_ prefix: String) -> String {
@@ -815,8 +772,9 @@ final class AppCoordinator: NSObject {
         let targetLangPrefix: String = (curLangPrefix == "en") ? "uk" : "en"
 
         // If we are in the middle of typing a word, we know the exact text from
-        // the in-memory buffer.
-        if !wordParser.buffer.isEmpty {
+        // the in-memory buffer — unless it may be the tail of a longer word, in
+        // which case the document path below finds the whole word instead.
+        if !wordParser.buffer.isEmpty && !textBeforeWordUnknown {
             let core = wordParser.buffer
             let converted = convert(core, from: curLangPrefix, to: targetLangPrefix)
             let cand = AmbiguousCandidate(
@@ -917,14 +875,15 @@ final class AppCoordinator: NSObject {
                                  targetLangPrefix: String,
                                   keepFollowingBoundary: Bool,
                                  boundaryEvent: CGEvent? = nil,
-                                 deleteCountOverride: Int? = nil) {
+                                 deleteCountOverride: Int? = nil,
+                                 trailing: String = "") {
         let deleteCount = deleteCountOverride ?? wordParser.buffer.count
         let initialUndoWordsAhead = (keepFollowingBoundary || boundaryEvent != nil) ? -1 : 0
         #if DEBUG
         if isRunningUnitTests || testSimulationMode {
-            let removeCount = min(deleteCount, testDocumentText.count)
+            let removeCount = min(deleteCount + trailing.count, testDocumentText.count)
             for _ in 0..<removeCount { testDocumentText.removeLast() }
-            testDocumentText += newWord
+            testDocumentText += newWord + trailing
             if let s = boundaryEvent?.firstUnicodeScalar {
                 testDocumentText.unicodeScalars.append(s)
             }
@@ -957,11 +916,13 @@ final class AppCoordinator: NSObject {
             // Delay to let the system commit the most recent keystroke
             DispatchQueue.main.asyncAfter(deadline: .now() + Timing.commitDelay) {
                 if keepFollowingBoundary { self.tapKey(.leftArrow) } // keep trailing boundary (space, etc.)
-                self.sendBackspace(times: deleteCount)
+                // Trailing punctuation typed after the word ("ghbdsn,") is still
+                // in the field: delete it with the word and retype it after.
+                self.sendBackspace(times: deleteCount + trailing.count)
 
                 let switchTo = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
                 self.ensureSwitch(to: switchTo) {
-                    self.typeUnicode(newWord)
+                    self.typeUnicode(newWord + trailing)
                     self.postSynthetic(boundaryEvent)
                     self.rememberBlindUndo(original: oldWord, corrected: newWord, restoreLangPrefix: restoreLangPrefix, wordsAhead: initialUndoWordsAhead)
                     if keepFollowingBoundary { self.tapKey(.rightArrow) }
@@ -1855,12 +1816,6 @@ extension AppCoordinator {
     /// Seed a blind correction-undo for tests.
     func testRememberBlindUndo(original: String, corrected: String, restoreLangPrefix: String, wordsAhead: Int = 0) {
         rememberBlindUndo(original: original, corrected: corrected, restoreLangPrefix: restoreLangPrefix, wordsAhead: wordsAhead)
-    }
-
-    func testSetEditingInsideWordBeforeInput(_ editing: Bool) {
-        #if DEBUG
-        testEditingInsideWordBeforeInput = editing
-        #endif
     }
 
     func testCapturedText() -> String { testDocumentText }

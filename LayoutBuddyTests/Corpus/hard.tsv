@@ -1,0 +1,35 @@
+# Out-of-vocabulary words typed correctly: names, jargon, slang, typos — must be left alone
+kubectl apply then check nginx logs	kubectl apply then check nginx logs
+webpack and eslint configs are in the repo	webpack and eslint configs are in the repo
+use async await instead of callbacks	use async await instead of callbacks
+the mutex guards the cron job	the mutex guards the cron job
+push a hotfix to the backend	push a hotfix to the backend
+devops onboarding after standup	devops onboarding after standup
+lgtm, merge when the ci is green	lgtm, merge when the ci is green
+wip, tbd, fyi, imo, asap	wip, tbd, fyi, imo, asap
+sudo grep localhost in hosts	sudo grep localhost in hosts
+npm vs yarn vs pnpm	npm vs yarn vs pnpm
+Mykola and Oleksandr are in Kharkiv	Mykola and Oleksandr are in Kharkiv
+Lviv, Dnipro and Zaporizhzhia	Lviv, Dnipro and Zaporizhzhia
+Bohdan, Yulia, Iryna, Svitlana and Andrii	Bohdan, Yulia, Iryna, Svitlana and Andrii
+Volodymyr wrote to Taras Shevchenko	Volodymyr wrote to Taras Shevchenko
+helo teh recieve thier	helo teh recieve thier
+хз, лол, ок, норм	хз, лол, ок, норм
+щас, кмк, мб, тіпа	щас, кмк, мб, тіпа
+шо, чо, капець, жесть, кринж	шо, чо, капець, жесть, кринж
+треба пофіксити баг і задеплоїти	треба пофіксити баг і задеплоїти
+закомітити і змерджити після апруву	закомітити і змерджити після апруву
+дай фідбек до дедлайну	дай фідбек до дедлайну
+юзер не бачить нову фічу	юзер не бачить нову фічу
+Микола, Олена і Тарас з Харкова	Микола, Олена і Тарас з Харкова
+Львів, Дніпро, Запоріжжя	Львів, Дніпро, Запоріжжя
+привт, дякю	привт, дякю
+# Rare or inflected words typed in the wrong layout — should be converted
+gthtghjuhfvedfyyzv	перепрограмуванням
+yfqwsrfdsijuj	найцікавішого
+ljjghfw.dfnb gthtpfdfynf;bnb	доопрацювати перезавантажити
+fdnjvfnbpjdfyjuj hjpujhyenbvtvj	автоматизованого розгорнутимемо
+ytgthtdthityj pfljrevtynedfnb	неперевершено задокументувати
+ьшісщташпгкфешщт гтиудшумфидн	misconfiguration unbelievably
+кузкщвгсшишдшен вузкусфешщті	reproducibility deprecations
+щмукутпштуукув іукшфдшяфешщт	overengineered serialization

@@ -18,6 +18,8 @@ enum KeyboardLayoutConverter {
             default:   return nil
             }
         }
+
+        var languagePrefix: String { self == .latin ? "en" : "uk" }
     }
 
     /// Strongly-typed entry point. Adding a new layout pair is a matter of

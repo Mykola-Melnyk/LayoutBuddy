@@ -495,23 +495,51 @@ final class LayoutBuddyTests: XCTestCase {
         XCTAssertTrue(app.testWordBuffer.isEmpty)
     }
 
-    func testMidWordEditDoesNotConvertBufferedWord() throws {
+    func testClickMidWordDropsBufferAndSkipsTheFragment() throws {
         let app = makeApp()
 
         try type("цщклі", into: app)
-        app.testSetEditingInsideWordBeforeInput(true)
-
-        let editEvent = try keyEvent(character: "a")
-        let editResult = app.testHandleKeyEvent(type: .keyDown, event: editEvent)
-
-        XCTAssertTrue(editResult?.takeUnretainedValue() === editEvent)
+        _ = app.testHandleKeyEvent(type: .leftMouseDown, event: try mouseDownEvent())
         XCTAssertTrue(app.testWordBuffer.isEmpty)
 
-        app.testSetEditingInsideWordBeforeInput(false)
-        let boundaryEvent = try keyEvent(character: "!")
-        let boundaryResult = app.testHandleKeyEvent(type: .keyDown, event: boundaryEvent)
+        // The caret may now sit inside an existing word: what follows is a
+        // fragment and must not be converted, even though it would be alone.
+        try type("цщклі", into: app)
+        let boundary = try keyEvent(character: "!")
+        let returned = app.testHandleKeyEvent(type: .keyDown, event: boundary)?.takeUnretainedValue()
+        XCTAssertTrue(returned === boundary)
+        XCTAssertEqual(app.testCapturedText(), "")
+    }
 
-        XCTAssertTrue(boundaryResult?.takeUnretainedValue() === boundaryEvent)
+    func testConversionResumesAfterAnObservedBoundary() throws {
+        let app = makeApp()
+
+        _ = app.testHandleKeyEvent(type: .leftMouseDown, event: try mouseDownEvent())
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: " "))
+
+        try type("цщклі", into: app)
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: "!"))
+        XCTAssertEqual(app.testCapturedText(), "works!")
+    }
+
+    func testOptionDeleteDropsBuffer() throws {
+        let app = makeApp()
+        try type("ghbdsn", into: app)
+
+        let optDelete = try keyEvent(keyCode: CGKeyCode(kVK_Delete), flags: .maskAlternate)
+        let returned = app.testHandleKeyEvent(type: .keyDown, event: optDelete)?.takeUnretainedValue()
+
+        XCTAssertTrue(returned === optDelete)
+        XCTAssertTrue(app.testWordBuffer.isEmpty)
+    }
+
+    func testBackspaceIntoOlderTextSkipsTheNextFragment() throws {
+        let app = makeApp()
+
+        // Empty buffer + backspace: we're now editing a word typed earlier.
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(keyCode: CGKeyCode(kVK_Delete)))
+        try type("csv", into: app)
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: " "))
         XCTAssertEqual(app.testCapturedText(), "")
     }
 
@@ -537,18 +565,22 @@ final class LayoutBuddyTests: XCTestCase {
         XCTAssertTrue(app.testWordBuffer.isEmpty)
     }
 
-    func testCommandShortcutPassesThroughWithoutBuffering() throws {
+    func testCommandShortcutPassesThroughAndDropsBuffer() throws {
         let app = makeApp()
-        app.testWordBuffer = "hel"
+        try type("csv", into: app)
 
-        let event = try keyEvent(character: "a", flags: .maskCommand)
+        // ⌘V may have pasted text into the middle of what we buffered.
+        let event = try keyEvent(character: "v", flags: .maskCommand)
         let returned = app.testHandleKeyEvent(type: .keyDown, event: event)?.takeUnretainedValue()
-
         XCTAssertTrue(returned === event)
-        XCTAssertEqual(app.testWordBuffer, "hel")   // shortcut must not edit the word buffer
+        XCTAssertTrue(app.testWordBuffer.isEmpty)
+
+        try type("csv", into: app)
+        _ = app.testHandleKeyEvent(type: .keyDown, event: try keyEvent(character: " "))
+        XCTAssertEqual(app.testCapturedText(), "")   // fragment after the paste is left alone
     }
 
-    func testOptionComboPassesThroughWithoutBuffering() throws {
+    func testOptionComboPassesThroughAndDropsBuffer() throws {
         let app = makeApp()
         app.testWordBuffer = "hel"
 
@@ -556,7 +588,7 @@ final class LayoutBuddyTests: XCTestCase {
         let returned = app.testHandleKeyEvent(type: .keyDown, event: event)?.takeUnretainedValue()
 
         XCTAssertTrue(returned === event)
-        XCTAssertEqual(app.testWordBuffer, "hel")
+        XCTAssertTrue(app.testWordBuffer.isEmpty)
     }
 
     func testValidEnglishWordIsNotConverted() throws {
@@ -594,6 +626,11 @@ final class LayoutBuddyTests: XCTestCase {
             event.keyboardSetUnicodeString(stringLength: 1, unicodeString: &value)
         }
         return event
+    }
+
+    private func mouseDownEvent() throws -> CGEvent {
+        try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown,
+                              mouseCursorPosition: .zero, mouseButton: .left))
     }
 
     private func firstCharacterCode(from event: CGEvent) throws -> UniChar {

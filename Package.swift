@@ -20,6 +20,10 @@ let package = Package(
                 "LayoutBuddy.entitlements",
                 "Assets.xcassets"
             ],
+            resources: [
+                .copy("Resources/words-en.txt"),
+                .copy("Resources/words-uk.txt")
+            ],
             swiftSettings: [
                 .swiftLanguageMode(.v5)
             ]
