@@ -60,6 +60,26 @@ enum WordReplacementPlanner {
                       contextRadius: contextRadius)
     }
 
+    /// Whether `word` sits just before the caret (allowing the same short
+    /// boundary gap as `planReplacement`) as a whole word — not the tail of a
+    /// longer word, and not glued to letters right after the caret.
+    static func isWholeWord(_ word: String, beforeCaret caret: Int, in ns: NSString) -> Bool {
+        let length = (word as NSString).length
+        guard length > 0, caret >= length, caret <= ns.length else { return false }
+        let found = ns.range(of: word, options: .backwards, range: NSRange(location: 0, length: caret))
+        guard found.location != NSNotFound else { return false }
+        let end = found.location + found.length
+        let gap = caret - end
+        guard gap >= 0, gap <= 2 else { return false }
+        if gap > 0 {
+            let between = ns.substring(with: NSRange(location: end, length: gap))
+            guard between.unicodeScalars.allSatisfy({ !isLetter($0) }) else { return false }
+        } else if caret < ns.length, isWordChar(scalar(ns, caret)) {
+            return false
+        }
+        return found.location == 0 || !isWordChar(scalar(ns, found.location - 1))
+    }
+
     /// Plan converting the last word (letters + word-internal chars) at or
     /// before the caret, computing the original from the text itself. Used by
     /// force-correct when there is no known original string. `convert` performs

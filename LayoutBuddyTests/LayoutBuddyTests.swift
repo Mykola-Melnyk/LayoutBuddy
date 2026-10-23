@@ -121,6 +121,18 @@ final class LayoutBuddyTests: XCTestCase {
         XCTAssertNil(planReplace("ghbdsn", caret: 3, original: "ghbdsn", converted: "привіт"))
     }
 
+    func testIsWholeWordBeforeCaret() {
+        func whole(_ text: String, _ caret: Int, _ word: String) -> Bool {
+            WordReplacementPlanner.isWholeWord(word, beforeCaret: caret, in: text as NSString)
+        }
+        XCTAssertTrue(whole("ghbdsn", 6, "ghbdsn"))                 // start of field
+        XCTAssertTrue(whole("hi ghbdsn ", 10, "ghbdsn"))            // boundary already landed
+        XCTAssertTrue(whole("hi ghbdsn more", 9, "ghbdsn"))
+        XCTAssertFalse(whole("foocsv", 6, "csv"))                   // tail of a longer word
+        XCTAssertFalse(whole("csvfoo", 3, "csv"))                   // glued to letters after the caret
+        XCTAssertFalse(whole("hi ghbd", 7, "ghbdsn"))               // not in the field (yet)
+    }
+
     func testPlanLastWordConvertsTrailingWord() {
         let plan = WordReplacementPlanner.planLastWord(
             fullText: "hello ghbdsn" as NSString, caret: 12,

@@ -39,9 +39,12 @@ final class AppCoordinator: NSObject {
     private let permissions = PermissionsManager()
     private var conversionOn = true
     
-    // Diagnostics. Flip to true to trace via os_log in any build:
+    // Diagnostics: traces every decision via os_log, in any build, without a
+    // rebuild. The log includes the words you type, so leave it off normally.
+    //   defaults write ~/Library/Preferences/mmelnyk.LayoutBuddy.plist Diagnostics -bool YES   (… NO to stop)
+    // (The plain domain form can hit a stale sandbox container from old builds.)
     //   log stream --predicate 'subsystem == "mmelnyk.LayoutBuddy"' --style compact
-    private let enableDiagnostics = false
+    private var enableDiagnostics: Bool { UserDefaults.standard.bool(forKey: "Diagnostics") }
     private let diagLogger = Logger(subsystem: "mmelnyk.LayoutBuddy", category: "diag")
 
     @inline(__always)
@@ -239,7 +242,7 @@ final class AppCoordinator: NSObject {
         // Switching apps moves focus to a field whose text we haven't seen.
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
-        ) { [weak self] _ in self?.loseTrackOfText() }
+        ) { [weak self] _ in self?.loseTrackOfText("app switch") }
         // Right-click → Services → "Add to LayoutBuddy: …" on selected text.
         NSApp.servicesProvider = self
         NSUpdateDynamicServices()
@@ -406,11 +409,15 @@ final class AppCoordinator: NSObject {
         if testSimulationMode { return }
         #endif
 
+        // Replay at the HID level so the keys pass through our own tap again
+        // and get buffered like normal typing. Posting below the tap (as this
+        // used to) hid them from us: words typed during a correction were never
+        // checked, or were checked with their first letters missing.
         for e in events {
-            e.post(tap: .cgAnnotatedSessionEventTap)
+            e.post(tap: .cghidEventTap)
             if let up = e.copy() {
                 up.type = .keyUp
-                up.post(tap: .cgAnnotatedSessionEventTap)
+                up.post(tap: .cghidEventTap)
             }
         }
     }
@@ -425,7 +432,7 @@ final class AppCoordinator: NSObject {
         // A click can put the caret anywhere, or in another field entirely —
         // except a click on our own menu, whose actions need the pending state.
         if isMouseDown(event.type) {
-            if !isClickOnOwnWindow(event) { loseTrackOfText() }
+            if !isClickOnOwnWindow(event) { loseTrackOfText("click") }
             return Unmanaged.passUnretained(event)
         }
 
@@ -482,21 +489,21 @@ final class AppCoordinator: NSObject {
         }
 
         if isCaretNavigationKey(keyCode) {
-            loseTrackOfText()
+            loseTrackOfText("caret key")
             return Unmanaged.passUnretained(event)
         }
 
         // Any ⌘/⌃/⌥ combo can change the text in ways we never see — paste,
         // undo, ⌥⌫ delete-word, ⌥-accented letters — so stop trusting the buffer.
         if hasCmd || hasCtrl || hasAlt {
-            loseTrackOfText()
+            loseTrackOfText("shortcut")
             return Unmanaged.passUnretained(event)
         }
 
         if !conversionOn { return Unmanaged.passUnretained(event) }
 
         if keyCode == CGKeyCode(kVK_ForwardDelete) {
-            loseTrackOfText()
+            loseTrackOfText("forward delete")
             return Unmanaged.passUnretained(event)
         }
 
@@ -505,7 +512,7 @@ final class AppCoordinator: NSObject {
             if wordParser.buffer.isEmpty {
                 // Deleting into text we didn't watch being typed: the next
                 // letters may extend a word whose start we never saw.
-                loseTrackOfText()
+                loseTrackOfText("backspace into older text")
             } else {
                 wordParser.removeLast()
             }
@@ -612,7 +619,8 @@ final class AppCoordinator: NSObject {
     /// converting until we've watched a boundary being typed — so a fragment of
     /// an existing word is never "corrected". This replaces asking the focused
     /// app over Accessibility on every keystroke, which stalled the event tap.
-    private func loseTrackOfText() {
+    private func loseTrackOfText(_ reason: String) {
+        dlog("[TRACK] lost (\(reason)); dropped buffer=\(wordParser.buffer)")
         wordParser.clear()
         inEmail = false
         textBeforeWordUnknown = true
@@ -641,13 +649,6 @@ final class AppCoordinator: NSObject {
         dlog("[PROC] entry buffer=\(wordParser.buffer)")
         defer { wordParser.clear() }
 
-        // The buffer may be the tail of a longer word we didn't see typed.
-        if textBeforeWordUnknown {
-            dlog("[PROC] skip: word start unknown")
-            textBeforeWordUnknown = false
-            return false
-        }
-
         // Decide the source language from what was actually TYPED (the buffer's
         // script), NOT the live keyboard layout. The layout can drift between
         // typing the word and hitting the boundary — and especially right after
@@ -659,10 +660,31 @@ final class AppCoordinator: NSObject {
         }
         let source: KeyboardLayoutConverter.Script =
             (firstLetter.map { wordParser.isCyrillicLetter($0) } ?? false) ? .cyrillic : .latin
-        let curLangPrefix = source.languagePrefix
-        let otherLangPrefix = oppositeLanguagePrefix(curLangPrefix)
+
+        // The buffer may be the tail of a longer word we didn't see typed
+        // (after a click, shortcut…). Let the boundary through and check the
+        // field once, off the event tap, before deciding anything.
+        if textBeforeWordUnknown {
+            textBeforeWordUnknown = false
+            processIfWholeWordLater(wordParser.buffer, typedIn: source)
+            return false
+        }
 
         let (core, trailing, decision) = decider.decide(token: wordParser.buffer, typedIn: source)
+        return act(on: decision, core: core, trailing: trailing, source: source,
+                   keepFollowingBoundary: keepFollowingBoundary, boundaryEvent: boundaryEvent)
+    }
+
+    /// Carries out a decision for a just-finished word. Returns true when the
+    /// word is being replaced (so the caller swallows a normal boundary).
+    private func act(on decision: LayoutDecider.Decision,
+                     core: String,
+                     trailing: String,
+                     source: KeyboardLayoutConverter.Script,
+                     keepFollowingBoundary: Bool,
+                     boundaryEvent: CGEvent?) -> Bool {
+        let curLangPrefix = source.languagePrefix
+        let otherLangPrefix = oppositeLanguagePrefix(curLangPrefix)
         dlog("[PROC] decision core=\(core) source=\(curLangPrefix) → \(decision)")
 
         switch decision {
@@ -677,6 +699,28 @@ final class AppCoordinator: NSObject {
                             deleteCountOverride: core.count, trailing: trailing)
             playSwitchSound(); menuBar.updateStatusTitleAndColor()
             return true
+        }
+    }
+
+    /// For a word whose start we didn't see: once the app has taken the
+    /// boundary, read the field and decide only if the buffered text really is
+    /// a whole word there. Without a readable field it stays untouched.
+    private func processIfWholeWordLater(_ token: String, typedIn source: KeyboardLayoutConverter.Script) {
+        if isRunningUnitTests || testSimulationMode {
+            dlog("[PROC] skip: word start unknown")
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Timing.commitDelay) {
+            guard let el = self.axFocusedElement() else { return self.dlog("[PROC] skip: word start unknown, no AX") }
+            let target = AXTextTarget(element: el)
+            guard let text = target.text, let sel = target.selection, sel.length == 0,
+                  WordReplacementPlanner.isWholeWord(token, beforeCaret: sel.location, in: text as NSString) else {
+                return self.dlog("[PROC] skip: \(token) is not a whole word in the field")
+            }
+            let (core, trailing, decision) = self.decider.decide(token: token, typedIn: source)
+            // The boundary already went through to the app.
+            _ = self.act(on: decision, core: core, trailing: trailing, source: source,
+                         keepFollowingBoundary: true, boundaryEvent: nil)
         }
     }
 
@@ -903,6 +947,7 @@ final class AppCoordinator: NSObject {
             if self.axReplaceWordBeforeCaret(original: oldWord, with: newWord,
                                              restoreLangPrefix: restoreLangPrefix,
                                              boundaryToInsert: boundaryToInsert) {
+                self.dlog("[REPLACE] AX edit applied: \(oldWord) → \(newWord)")
                 // The text edit needed no layout switch; switch only so the user
                 // continues typing in the target layout (UX).
                 let switchTo = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
@@ -910,11 +955,22 @@ final class AppCoordinator: NSObject {
                 return
             }
 
-            // Fallback: synthetic-keystroke choreography for fields without AX.
-            self.dlog("[REPLACE] AX unavailable; using keystroke fallback")
+            // The app may not have inserted the last keystrokes yet. Hold the
+            // user's new keys, give it a moment, and try the precise edit again.
             self.isSynthesizing = true
-            // Delay to let the system commit the most recent keystroke
             DispatchQueue.main.asyncAfter(deadline: .now() + Timing.commitDelay) {
+                if self.axReplaceWordBeforeCaret(original: oldWord, with: newWord,
+                                                 restoreLangPrefix: restoreLangPrefix,
+                                                 boundaryToInsert: boundaryToInsert) {
+                    self.dlog("[REPLACE] AX edit applied on retry: \(oldWord) → \(newWord)")
+                    self.isSynthesizing = false
+                    let switchTo = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
+                    self.ensureSwitch(to: switchTo) { self.menuBar.updateStatusTitleAndColor() }
+                    return
+                }
+
+                // Fallback: synthetic-keystroke choreography for fields without AX.
+                self.dlog("[REPLACE] AX unavailable; using keystroke fallback")
                 if keepFollowingBoundary { self.tapKey(.leftArrow) } // keep trailing boundary (space, etc.)
                 // Trailing punctuation typed after the word ("ghbdsn,") is still
                 // in the field: delete it with the word and retype it after.
@@ -1215,6 +1271,9 @@ final class AppCoordinator: NSObject {
                        on target: TextTarget,
                        restoreLangPrefix: String) -> Bool {
         guard let plan else { return false }
+        // Restore rather than clear: during a retry the caller is already
+        // holding the user's keys and must keep holding them if this fails.
+        let wasSynthesizing = isSynthesizing
         isSynthesizing = true
         // Replace just the word's range (not the whole field) so the app doesn't
         // yank the caret to the start.
@@ -1228,11 +1287,11 @@ final class AppCoordinator: NSObject {
             // the original word so the caller's keystroke fallback deletes the
             // right characters. Then report failure.
             _ = target.select(NSRange(location: plan.replacedRange.location + plan.replacedRange.length, length: 0))
-            isSynthesizing = false
+            isSynthesizing = wasSynthesizing
             return false
         }
         _ = target.select(NSRange(location: plan.newCaret, length: 0))
-        isSynthesizing = false
+        isSynthesizing = wasSynthesizing
 
         if let el = target.axElement {
             rememberAXUndo(element: el, range: plan.correctedRange,
