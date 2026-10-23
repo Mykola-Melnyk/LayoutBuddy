@@ -61,7 +61,14 @@ final class AppCoordinator: NSObject {
     private var isSynthesizing = false {
         didSet { if !isSynthesizing { flushQueuedEvents() } }
     }
-    private var queuedEvents: [CGEvent] = []
+    /// A key held back while we synthesize. Its text is read when it arrives:
+    /// a copy of a hardware key event read later can report the wrong character.
+    private struct QueuedKey {
+        let keyCode: CGKeyCode
+        let flags: CGEventFlags
+        let text: [UniChar]
+    }
+    private var queuedEvents: [QueuedKey] = []
     private let queuedEventsLock = NSLock()
     // When running unit tests, avoid posting real keyboard events to the session.
     private let isRunningUnitTests: Bool = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
@@ -126,6 +133,7 @@ final class AppCoordinator: NSObject {
         let targetLangPrefix: String       // "en" or "uk"
         let keystrokeOnly: Bool            // true when saved blindly
         var wordsAhead: Int = 0            // words typed after this one
+        var charsAfter: Int = 0            // typed chars between the word and the caret (blind only)
     }
     private var ambiguityStack: [AmbiguousCandidate] = []
     private let ambiguityMax = 5
@@ -148,6 +156,8 @@ final class AppCoordinator: NSObject {
         static let convertHotkey = 0.1
         /// Re-check delay when saving a tie candidate after a boundary.
         static let captureTie = 0.05
+        /// How long a pasted correction keeps the clipboard before restoring it.
+        static let pasteRestore = 0.25
     }
 
     private struct CorrectionUndo {
@@ -161,6 +171,9 @@ final class AppCoordinator: NSObject {
         let restoreLangPrefix: String
         let keystrokeOnly: Bool
         var wordsAhead: Int = 0
+        /// Blind undos only: characters typed after the corrected word (its
+        /// boundary and trailing punctuation), which sit between it and the caret.
+        var charsAfter: Int = 0
     }
     private var lastCorrectionUndo: CorrectionUndo?
 
@@ -242,7 +255,13 @@ final class AppCoordinator: NSObject {
         // Switching apps moves focus to a field whose text we haven't seen.
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
-        ) { [weak self] _ in self?.loseTrackOfText("app switch") }
+        ) { [weak self] note in
+            self?.loseTrackOfText("app switch")
+            if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+                self?.requestAccessibilityTree(of: app)
+            }
+        }
+        if let app = NSWorkspace.shared.frontmostApplication { requestAccessibilityTree(of: app) }
         // Right-click → Services → "Add to LayoutBuddy: …" on selected text.
         NSApp.servicesProvider = self
         NSUpdateDynamicServices()
@@ -278,6 +297,19 @@ final class AppCoordinator: NSObject {
         let word = text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).first.map(String.init) ?? text
         let added = userDictionary.add(word, to: languages)
         if !added.isEmpty { playSwitchSound() }
+    }
+
+    /// Electron and Chromium apps (Slack, VS Code, Claude, Chrome) only build
+    /// their accessibility tree when an assistive app asks for it. Without it
+    /// every correction there falls back to deleting and retyping with
+    /// synthetic keys; with it they get the same precise edit as TextEdit.
+    /// `AXManualAccessibility` is the switch those apps expose for exactly
+    /// this; apps that don't know the attribute just reject it.
+    private func requestAccessibilityTree(of app: NSRunningApplication) {
+        guard app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+        let element = AXUIElementCreateApplication(app.processIdentifier)
+        let result = AXUIElementSetAttributeValue(element, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        dlog("[AX] AXManualAccessibility for \(app.bundleIdentifier ?? "?"): \(result == .success ? "on" : "unsupported (\(result.rawValue))")")
     }
 
     // MARK: - Onboarding / permissions
@@ -392,8 +424,17 @@ final class AppCoordinator: NSObject {
     }
 
     private func enqueueQueuedEvent(_ event: CGEvent) {
+        var length = 0
+        event.keyboardGetUnicodeString(maxStringLength: 0, actualStringLength: &length, unicodeString: nil)
+        var text = [UniChar](repeating: 0, count: length)
+        if length > 0 {
+            event.keyboardGetUnicodeString(maxStringLength: length, actualStringLength: &length, unicodeString: &text)
+        }
+        let key = QueuedKey(keyCode: CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode)),
+                            flags: event.flags, text: text)
+        dlog("[QUEUE] held keyCode=\(key.keyCode) text=\(String(utf16CodeUnits: text, count: text.count).debugDescription)")
         queuedEventsLock.lock()
-        queuedEvents.append(event)
+        queuedEvents.append(key)
         queuedEventsLock.unlock()
     }
 
@@ -413,11 +454,14 @@ final class AppCoordinator: NSObject {
         // and get buffered like normal typing. Posting below the tap (as this
         // used to) hid them from us: words typed during a correction were never
         // checked, or were checked with their first letters missing.
-        for e in events {
-            e.post(tap: .cghidEventTap)
-            if let up = e.copy() {
-                up.type = .keyUp
-                up.post(tap: .cghidEventTap)
+        if !events.isEmpty { dlog("[QUEUE] replaying \(events.count) held key(s)") }
+        for key in events {
+            for keyDown in [true, false] {
+                guard let e = CGEvent(keyboardEventSource: nil, virtualKey: key.keyCode, keyDown: keyDown) else { continue }
+                e.flags = key.flags
+                var text = key.text
+                if !text.isEmpty { e.keyboardSetUnicodeString(stringLength: text.count, unicodeString: &text) }
+                e.post(tap: .cghidEventTap)
             }
         }
     }
@@ -437,7 +481,7 @@ final class AppCoordinator: NSObject {
         }
 
         if isSynthesizing {
-            if let copy = event.copy() { enqueueQueuedEvent(copy) }
+            enqueueQueuedEvent(event)
             return nil
         }
         guard event.type == .keyDown else { return Unmanaged.passUnretained(event) }
@@ -474,6 +518,7 @@ final class AppCoordinator: NSObject {
         // Force-correct last word hotkey
         let forceHK = preferences.forceCorrectHotkey
         if keyCode == forceHK.keyCode && filtered == forceHK.modifiers {
+            dlog("[HOTKEY] force-correct pressed")
             let work = { [self] in self.forceCorrectLastWord() }
             if isRunningUnitTests || testSimulationMode { work() }
             else { DispatchQueue.main.async(execute: work) }
@@ -482,6 +527,7 @@ final class AppCoordinator: NSObject {
 
         let undoHK = preferences.undoCorrectionHotkey
         if keyCode == undoHK.keyCode && filtered == undoHK.modifiers {
+            dlog("[HOTKEY] undo pressed — undo stored=\(lastCorrectionUndo != nil)")
             let work = { [self] in self.undoLastCorrection() }
             if isRunningUnitTests || testSimulationMode { work() }
             else { DispatchQueue.main.async(execute: work) }
@@ -496,7 +542,7 @@ final class AppCoordinator: NSObject {
         // Any ⌘/⌃/⌥ combo can change the text in ways we never see — paste,
         // undo, ⌥⌫ delete-word, ⌥-accented letters — so stop trusting the buffer.
         if hasCmd || hasCtrl || hasAlt {
-            loseTrackOfText("shortcut")
+            loseTrackOfText("shortcut keyCode=\(keyCode) mods=\(describe(filtered))")
             return Unmanaged.passUnretained(event)
         }
 
@@ -566,9 +612,12 @@ final class AppCoordinator: NSObject {
             let isEsc    = keyCode == CGKeyCode(kVK_Escape)
             let specialBoundary = isReturn || isTab || isEsc
 
-            let eventCopy = specialBoundary ? nil : event.copy()
+            // Keep the boundary's character as read now. Reading it later from
+            // a copy of the hardware event (after the layout switch) gave the
+            // previous letter instead ("привітnяк" in Chromium).
+            let boundary: UnicodeScalar? = specialBoundary ? nil : scalar
             dlog("[KEY] boundary before process buffer=\(wordParser.buffer) scalar=\(scalar)")
-            let replaced = processBufferedWordIfNeeded(keepFollowingBoundary: specialBoundary, boundaryEvent: eventCopy)
+            let replaced = processBufferedWordIfNeeded(keepFollowingBoundary: specialBoundary, boundary: boundary)
             dlog("[KEY] boundary after process buffer=\(wordParser.buffer)")
             // We watched this boundary land, so the next word's start is known.
             textBeforeWordUnknown = false
@@ -588,6 +637,12 @@ final class AppCoordinator: NSObject {
         textBeforeWordUnknown = false
         bumpWordsAhead()
         return Unmanaged.passUnretained(event)
+    }
+
+    /// "⌃⌥⇧⌘"-style text for diagnostics.
+    private func describe(_ mods: NSEvent.ModifierFlags) -> String {
+        [(NSEvent.ModifierFlags.control, "⌃"), (.option, "⌥"), (.shift, "⇧"), (.command, "⌘")]
+            .filter { mods.contains($0.0) }.map(\.1).joined()
     }
 
     private func isMouseDown(_ type: CGEventType) -> Bool {
@@ -644,7 +699,7 @@ final class AppCoordinator: NSObject {
 
     // MARK: - Process a completed word
 
-    private func processBufferedWordIfNeeded(keepFollowingBoundary: Bool = false, boundaryEvent: CGEvent? = nil) -> Bool {
+    private func processBufferedWordIfNeeded(keepFollowingBoundary: Bool = false, boundary: UnicodeScalar? = nil) -> Bool {
         guard !wordParser.buffer.isEmpty else { return false }
         dlog("[PROC] entry buffer=\(wordParser.buffer)")
         defer { wordParser.clear() }
@@ -672,7 +727,7 @@ final class AppCoordinator: NSObject {
 
         let (core, trailing, decision) = decider.decide(token: wordParser.buffer, typedIn: source)
         return act(on: decision, core: core, trailing: trailing, source: source,
-                   keepFollowingBoundary: keepFollowingBoundary, boundaryEvent: boundaryEvent)
+                   keepFollowingBoundary: keepFollowingBoundary, boundary: boundary)
     }
 
     /// Carries out a decision for a just-finished word. Returns true when the
@@ -682,7 +737,7 @@ final class AppCoordinator: NSObject {
                      trailing: String,
                      source: KeyboardLayoutConverter.Script,
                      keepFollowingBoundary: Bool,
-                     boundaryEvent: CGEvent?) -> Bool {
+                     boundary: UnicodeScalar?) -> Bool {
         let curLangPrefix = source.languagePrefix
         let otherLangPrefix = oppositeLanguagePrefix(curLangPrefix)
         dlog("[PROC] decision core=\(core) source=\(curLangPrefix) → \(decision)")
@@ -695,7 +750,7 @@ final class AppCoordinator: NSObject {
             return false
         case .convert(let converted):
             replaceLastWord(original: core, with: converted, restoreLangPrefix: curLangPrefix, targetLangPrefix: otherLangPrefix,
-                            keepFollowingBoundary: keepFollowingBoundary, boundaryEvent: boundaryEvent,
+                            keepFollowingBoundary: keepFollowingBoundary, boundary: boundary,
                             deleteCountOverride: core.count, trailing: trailing)
             playSwitchSound(); menuBar.updateStatusTitleAndColor()
             return true
@@ -720,7 +775,7 @@ final class AppCoordinator: NSObject {
             let (core, trailing, decision) = self.decider.decide(token: token, typedIn: source)
             // The boundary already went through to the app.
             _ = self.act(on: decision, core: core, trailing: trailing, source: source,
-                         keepFollowingBoundary: true, boundaryEvent: nil)
+                         keepFollowingBoundary: true, boundary: nil)
         }
     }
 
@@ -731,7 +786,8 @@ final class AppCoordinator: NSObject {
     private func rememberBlindUndo(original: String,
                                    corrected: String,
                                    restoreLangPrefix: String,
-                                   wordsAhead: Int = 0) {
+                                   wordsAhead: Int = 0,
+                                   charsAfter: Int = 0) {
         guard !original.isEmpty, !corrected.isEmpty else { return }
         lastCorrectionUndo = CorrectionUndo(
             element: nil,
@@ -743,7 +799,8 @@ final class AppCoordinator: NSObject {
             after: "",
             restoreLangPrefix: restoreLangPrefix,
             keystrokeOnly: true,
-            wordsAhead: wordsAhead
+            wordsAhead: wordsAhead,
+            charsAfter: charsAfter
         )
     }
 
@@ -790,6 +847,7 @@ final class AppCoordinator: NSObject {
         }
 
         guard let undo = lastCorrectionUndo else {
+            dlog("[UNDO] nothing to undo")
             NSSound.beep()
             return
         }
@@ -804,8 +862,9 @@ final class AppCoordinator: NSObject {
 
         // Prefer an exact-string AX replacement in the focused field (robust for
         // punctuation and blind undos); then the stored-range AX path; then keys.
-        if axUndoByText(undo) { return }
-        if !undo.keystrokeOnly, applyAXUndo(undo) { return }
+        if axUndoByText(undo) { return dlog("[UNDO] AX by text: \(undo.corrected) → \(undo.original)") }
+        if !undo.keystrokeOnly, applyAXUndo(undo) { return dlog("[UNDO] AX by range: \(undo.corrected) → \(undo.original)") }
+        dlog("[UNDO] keystrokes: \(undo.corrected) → \(undo.original) wordsAhead=\(undo.wordsAhead) charsAfter=\(undo.charsAfter)")
         fallbackNavigateAndUndo(undo)
     }
 
@@ -895,15 +954,14 @@ final class AppCoordinator: NSObject {
                 let converted = self.convert(original, from: curLangPrefix, to: targetLangPrefix)
                 // Replace the current selection
                 self.sendBackspace(times: 1)
-                let targetID = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
-                self.ensureSwitch(to: targetID) {
-                    self.typeUnicode(converted)
+                self.pasteText(converted) {
                     self.rememberBlindUndo(original: original, corrected: converted, restoreLangPrefix: curLangPrefix)
                     // Restore caret position after trailing boundary (e.g., space)
                     self.optRight()
-                    self.menuBar.updateStatusTitleAndColor()
                     self.playSwitchSound()
                     self.isSynthesizing = false
+                    let targetID = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
+                    self.ensureSwitch(to: targetID) { self.menuBar.updateStatusTitleAndColor() }
                 }
             }
         }
@@ -918,17 +976,17 @@ final class AppCoordinator: NSObject {
                                  restoreLangPrefix: String,
                                  targetLangPrefix: String,
                                   keepFollowingBoundary: Bool,
-                                 boundaryEvent: CGEvent? = nil,
+                                 boundary: UnicodeScalar? = nil,
                                  deleteCountOverride: Int? = nil,
                                  trailing: String = "") {
         let deleteCount = deleteCountOverride ?? wordParser.buffer.count
-        let initialUndoWordsAhead = (keepFollowingBoundary || boundaryEvent != nil) ? -1 : 0
+        let initialUndoWordsAhead = (keepFollowingBoundary || boundary != nil) ? -1 : 0
         #if DEBUG
         if isRunningUnitTests || testSimulationMode {
             let removeCount = min(deleteCount + trailing.count, testDocumentText.count)
             for _ in 0..<removeCount { testDocumentText.removeLast() }
             testDocumentText += newWord + trailing
-            if let s = boundaryEvent?.firstUnicodeScalar {
+            if let s = boundary {
                 testDocumentText.unicodeScalars.append(s)
             }
             rememberBlindUndo(original: oldWord, corrected: newWord, restoreLangPrefix: restoreLangPrefix, wordsAhead: initialUndoWordsAhead)
@@ -937,13 +995,13 @@ final class AppCoordinator: NSObject {
         #endif
 
         DispatchQueue.main.async {
-            self.dlog("[REPLACE] start synth=\(self.isSynthesizing) curID=\(self.layoutManager.currentInputSourceID()) buffer=\(self.wordParser.buffer)")
+            self.dlog("[REPLACE] start app=\(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "?") synth=\(self.isSynthesizing) curID=\(self.layoutManager.currentInputSourceID()) buffer=\(self.wordParser.buffer)")
 
             // Prefer a precise Accessibility edit. A normal boundary (space,
             // punctuation) was swallowed from the event stream, so bake it back
             // in; a special boundary (return/tab) was let through and is handled
             // by the app itself, so there is nothing to reinsert.
-            let boundaryToInsert: UnicodeScalar? = keepFollowingBoundary ? nil : boundaryEvent?.firstUnicodeScalar
+            let boundaryToInsert: UnicodeScalar? = keepFollowingBoundary ? nil : boundary
             if self.axReplaceWordBeforeCaret(original: oldWord, with: newWord,
                                              restoreLangPrefix: restoreLangPrefix,
                                              boundaryToInsert: boundaryToInsert) {
@@ -970,20 +1028,27 @@ final class AppCoordinator: NSObject {
                 }
 
                 // Fallback: synthetic-keystroke choreography for fields without AX.
-                self.dlog("[REPLACE] AX unavailable; using keystroke fallback")
+                self.dlog("[REPLACE] AX edit unavailable or not applied; using keystroke fallback")
                 if keepFollowingBoundary { self.tapKey(.leftArrow) } // keep trailing boundary (space, etc.)
                 // Trailing punctuation typed after the word ("ghbdsn,") is still
                 // in the field: delete it with the word and retype it after.
                 self.sendBackspace(times: deleteCount + trailing.count)
 
-                let switchTo = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
-                self.ensureSwitch(to: switchTo) {
-                    self.typeUnicode(newWord + trailing)
-                    self.postSynthetic(boundaryEvent)
-                    self.rememberBlindUndo(original: oldWord, corrected: newWord, restoreLangPrefix: restoreLangPrefix, wordsAhead: initialUndoWordsAhead)
+                // Re-insert the swallowed boundary along with the word.
+                let boundaryText = boundary.map { String($0) } ?? ""
+                let typedBoundary = !boundaryText.isEmpty || keepFollowingBoundary
+                self.pasteText(newWord + trailing + boundaryText) {
+                    // The boundary was already counted as a word by now, so no
+                    // -1 here; the undo steps over the boundary and trailing
+                    // punctuation that follow the word.
+                    self.rememberBlindUndo(original: oldWord, corrected: newWord, restoreLangPrefix: restoreLangPrefix,
+                                           charsAfter: trailing.count + (typedBoundary ? 1 : 0))
                     if keepFollowingBoundary { self.tapKey(.rightArrow) }
-                    self.menuBar.updateStatusTitleAndColor()
                     self.isSynthesizing = false
+                    // Pasted text doesn't depend on the layout; switch so the
+                    // user carries on typing in the corrected language.
+                    let switchTo = self.layoutID(forLanguagePrefix: targetLangPrefix) ?? self.otherLayoutID()
+                    self.ensureSwitch(to: switchTo) { self.menuBar.updateStatusTitleAndColor() }
                 }
             }
         }
@@ -1000,6 +1065,33 @@ final class AppCoordinator: NSObject {
         for _ in 0..<times {
             postSynthetic(CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: true))
             postSynthetic(CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: false))
+        }
+    }
+
+    /// Inserts `text` at the caret by pasting it, then puts the user's
+    /// clipboard back. Typing text as synthetic Unicode key events is not
+    /// reliable in Chromium apps (Chrome, Electron): the last character could
+    /// come out as a different letter ("привітn"). Pasting skips the
+    /// key-to-character translation entirely and doesn't depend on the layout.
+    private func pasteText(_ text: String, then done: @escaping () -> Void) {
+        if isRunningUnitTests { return done() }
+        #if DEBUG
+        if testSimulationMode { return done() }
+        #endif
+        let pb = NSPasteboard.general
+        let snapshot = PasteboardSnapshot(from: pb)
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+        // Ask clipboard managers not to record this temporary entry.
+        pb.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
+        pb.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.AutoGeneratedType"))
+        let ours = pb.changeCount
+        tapKeyWithFlags(CGKeyCode(kVK_ANSI_V), flags: .maskCommand)
+        dlog("[PASTE] \(text.debugDescription)")
+        // Give the app time to read the clipboard before restoring it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Timing.pasteRestore) {
+            if pb.changeCount == ours { snapshot.restore(to: pb) }
+            done()
         }
     }
 
@@ -1283,10 +1375,12 @@ final class AppCoordinator: NSObject {
         // Confirm the value actually changed before trusting it.
         let confirmed = wrote && target.text == plan.newText
         guard confirmed else {
-            // The word may be left selected; collapse to a caret at the end of
-            // the original word so the caller's keystroke fallback deletes the
-            // right characters. Then report failure.
-            _ = target.select(NSRange(location: plan.replacedRange.location + plan.replacedRange.length, length: 0))
+            // The word may be left selected; put the caret back exactly where
+            // it was, which is where the caller's keystroke fallback expects it.
+            // (Collapsing to the end of the word instead put it before an
+            // already-typed space, and the fallback then kept the word's last
+            // letter: "привітn".) Then report failure.
+            _ = target.select(NSRange(location: plan.originalCaret, length: 0))
             isSynthesizing = wasSynthesizing
             return false
         }
@@ -1650,7 +1744,8 @@ final class AppCoordinator: NSObject {
             when: CFAbsoluteTimeGetCurrent(),
             targetLangPrefix: undo.restoreLangPrefix,
             keystrokeOnly: true,
-            wordsAhead: undo.wordsAhead
+            wordsAhead: undo.wordsAhead,
+            charsAfter: undo.charsAfter
         )
         fallbackNavigateAndReplace(cand, recordUndo: false)
     }
@@ -1683,6 +1778,8 @@ final class AppCoordinator: NSObject {
             let stepsLeft = max(1, cand.wordsAhead + 1)
 
             if exactSelect {
+                // Step back over the boundary typed after the word, then select it.
+                for _ in 0..<cand.charsAfter { self.tapKey(.leftArrow) }
                 for _ in 0..<cand.original.count { self.shiftLeft() }
             } else {
                 for _ in 0..<stepsLeft { self.optLeft() }
@@ -1690,11 +1787,8 @@ final class AppCoordinator: NSObject {
             }
             self.sendBackspace(times: 1)
 
-            // Switch to target layout and type converted word
-            self.dlog("[NAVREP] switching to targetID=\(targetID)")
-            self.ensureSwitch(to: targetID) {
-                self.dlog("[NAVREP] typing on targetID=\(targetID) synth=\(self.isSynthesizing)")
-                self.typeUnicode(cand.converted)
+            self.pasteText(cand.converted) {
+                self.dlog("[NAVREP] pasted \(cand.converted)")
                 if recordUndo {
                     self.rememberBlindUndo(
                         original: cand.original,
@@ -1703,14 +1797,15 @@ final class AppCoordinator: NSObject {
                         wordsAhead: cand.wordsAhead
                     )
                 }
-                // Return caret to where it was (word-nav case only)
-                if !exactSelect {
+                // Return caret to where it was
+                if exactSelect {
+                    for _ in 0..<cand.charsAfter { self.tapKey(.rightArrow) }
+                } else {
                     for _ in 0..<stepsLeft { self.optRight() }
                 }
-                self.menuBar.updateStatusTitleAndColor()
                 self.playSwitchSound()
                 self.isSynthesizing = false
-                self.dlog("[NAVREP] end synth=\(self.isSynthesizing) curID=\(self.layoutManager.currentInputSourceID()) buffer=\(self.wordParser.buffer)")
+                self.ensureSwitch(to: targetID) { self.menuBar.updateStatusTitleAndColor() }
             }
         }
     }

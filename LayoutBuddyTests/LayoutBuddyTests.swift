@@ -241,9 +241,21 @@ final class LayoutBuddyTests: XCTestCase {
         XCTAssertFalse(app.replaceWord(on: target, original: "ghbdsn", converted: "привіт",
                                        boundaryToInsert: " ", restoreLangPrefix: "en"))
         XCTAssertEqual(target.text, "ghbdsn")                              // genuinely unchanged
-        // Caret collapsed to the end of the original word so the keystroke
-        // fallback deletes the right characters.
+        // Caret back where it was, so the keystroke fallback deletes the right characters.
         XCTAssertEqual(target.selection, NSRange(location: 6, length: 0))
+    }
+
+    // Bug: the boundary was already in the field ("ghbdsn |"). A failed AX edit
+    // left the caret before the space, so the fallback's step back over the
+    // space landed before "n" and the result was "привітn".
+    func testFailedAXEditRestoresCaretAfterTypedBoundary() {
+        let app = makeApp()
+        let target = FakeTextTarget("ghbdsn ", caret: 7)
+        target.lieOnReplace = true
+
+        XCTAssertFalse(app.replaceWord(on: target, original: "ghbdsn", converted: "привіт",
+                                       boundaryToInsert: nil, restoreLangPrefix: "en"))
+        XCTAssertEqual(target.selection, NSRange(location: 7, length: 0))
     }
 
     func testCorrectLastWordOnTargetNoOpReturnsFalse() {
@@ -688,7 +700,7 @@ final class FakeTextTarget: TextTarget {
 
     func replace(_ range: NSRange, with text: String) -> Bool {
         guard !failWrite else { return false }
-        if lieOnReplace { return true }   // success reported, but nothing changes
+        if lieOnReplace { caret = range; return true }   // word selected, success reported, text unchanged
         let mutable = content.mutableCopy() as! NSMutableString
         mutable.replaceCharacters(in: range, with: text)
         content = mutable

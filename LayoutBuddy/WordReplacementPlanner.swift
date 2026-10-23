@@ -16,6 +16,7 @@ enum WordReplacementPlanner {
         let replacedRange: NSRange   // the original word's range in the pre-edit text
         let replacement: String      // converted text (+ any baked boundary)
         let newText: String
+        let originalCaret: Int       // caret before the edit, to restore if it fails
         let newCaret: Int
         let correctedRange: NSRange   // the converted word's range in the post-edit text
         let before: String
@@ -126,7 +127,7 @@ enum WordReplacementPlanner {
         let (before, after) = context(around: correctedRange, in: newText, radius: contextRadius)
         return Plan(original: original, converted: converted,
                     replacedRange: wordRange, replacement: replacement,
-                    newText: newText as String, newCaret: newCaret,
+                    newText: newText as String, originalCaret: caret, newCaret: newCaret,
                     correctedRange: correctedRange, before: before, after: after)
     }
 
